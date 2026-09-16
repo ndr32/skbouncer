@@ -1,0 +1,4 @@
+*.o
+*.skel.h
+skbouncer
+.DS_Store

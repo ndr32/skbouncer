@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(make:*)",
+      "Bash(clang:*)",
+      "Bash(bpftool:*)",
+      "Bash(sudo bpftool:*)",
+      "Bash(docker:*)",
+      "Bash(git:*)",
+      "Read(*)",
+      "Edit(src/**)",
+      "Write(src/**)"
+    ],
+    "deny": [
+      "Bash(apt:*)",
+      "Bash(apt-get:*)",
+      "Bash(sudo apt:*)",
+      "Bash(sudo apt-get:*)",
+      "Bash(*apt-mark*)",
+      "Bash(*do-release-upgrade*)",
+      "Bash(*unhold*)"
+    ]
+  }
+}
