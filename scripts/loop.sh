@@ -12,6 +12,7 @@ cd "$(dirname "$0")/.."
 source scripts/guard.sh
 
 MAX_ITER="${MAX_ITER:-15}"
+MILESTONE="${MILESTONE:-M2.5}"
 PROMPT_FILE="${PROMPT_FILE:-PROMPT.md}"
 CLAUDE="${CLAUDE:-claude}"
 
@@ -19,7 +20,7 @@ CLAUDE="${CLAUDE:-claude}"
 # it runs after every iteration.
 exit_check() {
 	make -s >/dev/null 2>&1 || return 1
-	grep -q '^- \[x\] DONE' PROGRESS.md 2>/dev/null || return 1
+	grep -qF -- "- [x] DONE $MILESTONE" PROGRESS.md 2>/dev/null || return 1
 	return 0
 }
 

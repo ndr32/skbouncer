@@ -5,7 +5,7 @@ failures in as much detail as successes.
 
 ## M2 — ClientHello detection on tc egress
 
-Status: not started.
+Status: complete, tagged beta1.
 
 ### Baseline
 
@@ -94,4 +94,24 @@ now uses `BPF_TC_F_REPLACE` with a fixed handle/priority. `clsact` is shared
 with the rest of the system, so the hook is only destroyed if we were the
 ones who created it.
 
-- [x] DONE
+- [x] DONE M2
+
+
+## M2.5 — make the fragmentation signal measurable
+
+Status: not started.
+
+### Baseline
+
+- M2 verified independently: 3 handshakes -> 3 events, 5 non-TLS -> 0 events.
+- `captured_len`, `trunc_reason`, `handshake_len`, `legacy_version` are
+  declared but never assigned.
+- `bpf_ringbuf_reserve()` failure returns TC_ACT_OK with no counter.
+- `sizeof(struct skb_event)` is 560; 512 is the unused snapshot. Ringbuf is
+  256 KiB, so capacity is 468 events rather than ~5400.
+- Docker bridge was broken (docker0 had no IPv4 address) and is now fixed;
+  containers reach the internet, so `--network host` is no longer needed.
+
+### Iterations
+
+<!-- append below -->
