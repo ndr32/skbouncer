@@ -12,7 +12,7 @@ cd "$(dirname "$0")/.."
 source scripts/guard.sh
 
 MAX_ITER="${MAX_ITER:-15}"
-MILESTONE="${MILESTONE:-M2.5}"
+MILESTONE="${MILESTONE:-M2.6}"
 PROMPT_FILE="${PROMPT_FILE:-PROMPT.md}"
 CLAUDE="${CLAUDE:-claude}"
 

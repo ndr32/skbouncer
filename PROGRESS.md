@@ -253,3 +253,24 @@ attribution is not, and this remains the M4 blocker. Fixing the bridge
 restored connectivity, not `skb->sk`.
 
 - [x] DONE M2.5
+
+
+## M2.6 — observe container egress at the veth
+
+Status: not started.
+
+### Baseline
+
+Measured 2026-09-21, bridged container (not `--network host`):
+
+- `ens33` egress: container ClientHello IS seen, `cgroup_id=0`, source shown
+  as `192.168.86.131` (SNATed), `record 1557 captured 1455 segment`.
+- `ens33` egress, host `curl`: `cgroup_id=18387`, matching the shell's
+  cgroup inode. So the helper works, but only for local sockets.
+- `veth*` egress and `docker0` egress: no events at all. Container-outbound
+  traffic is ingress on the host side of the veth, and the loader only
+  attaches `BPF_TC_EGRESS`.
+
+### Iterations
+
+<!-- append below -->

@@ -41,6 +41,17 @@ later on data egress. So "observe and block at the same hook" does not work. App
 **cgroup helpers.** `bpf_get_current_cgroup_id()` needs process context, which tc programs do
 NOT have. From tc use `bpf_skb_cgroup_id()`; from socket hooks use `bpf_sk_cgroup_id()`.
 
+**MEASURED 2026-09-21 - cgroup attribution does not work on the physical interface for
+bridged containers.** At `ens33` egress a container's packet has already been forwarded and
+SNATed, so it has no local socket: `bpf_skb_cgroup_id()` returns 0 and the tuple shows the
+host address, not `172.17.0.2`. Host-local sockets are fine (measured cgroup_id 18387,
+matching the shell's cgroup inode). The veth and docker0 see nothing at egress, because
+container-outbound traffic is INGRESS on the host side of the veth.
+
+So container identity comes from the attachment point, not from the helper: attach
+BPF_TC_INGRESS to a specific container's veth, where one veth is one container and the
+tuple is still pre-NAT. `--network host` hides this, because there the socket is local.
+
 **Verifier discipline.** Bounds-check against data_end before EVERY read. Bound all loops
 (`bpf_loop()` available). Cap cipher-suite list at 64 entries.
 
