@@ -23,6 +23,7 @@ struct options {
 	const char *cgroup_path;
 	const char *policy_path;
 	enum run_mode mode;
+	enum skb_direction direction;
 	bool verbose;
 };
 
@@ -89,14 +90,21 @@ static void usage(FILE *out, const char *argv0)
 	fprintf(out,
 "usage: %s [options]\n"
 "\n"
-"  -i, --iface <dev>     attach to clsact egress on <dev>\n"
+"  -i, --iface <dev>     attach to clsact on <dev>\n"
+"  -d, --direction <d>   egress (default) or ingress\n"
 "  -c, --cgroup <path>   restrict to this cgroup v2 path\n"
 "  -p, --policy <file>   JSON policy file\n"
 "  -m, --mode <mode>     audit (default) or enforce\n"
 "  -v, --verbose         pass libbpf debug output through\n"
 "  -h, --help            this text\n"
 "\n"
-"enforce mode requires --cgroup and refuses the root cgroup.\n",
+"enforce mode requires --cgroup and refuses the root cgroup.\n"
+"\n"
+"A bridged container's outbound traffic is INGRESS on the host side of its\n"
+"veth, and is still pre-NAT there. Watching one container therefore means\n"
+"  -i <its veth> --direction ingress\n"
+"rather than the physical interface, where the packet has been forwarded\n"
+"and SNATed and carries no cgroup id.\n",
 		argv0);
 }
 
@@ -127,20 +135,32 @@ static bool cgroup_path_is_safe(const char *path, const char **why)
 static int parse_args(int argc, char **argv, struct options *opt)
 {
 	static const struct option longopts[] = {
-		{ "iface",   required_argument, NULL, 'i' },
-		{ "cgroup",  required_argument, NULL, 'c' },
-		{ "policy",  required_argument, NULL, 'p' },
-		{ "mode",    required_argument, NULL, 'm' },
-		{ "verbose", no_argument,       NULL, 'v' },
-		{ "help",    no_argument,       NULL, 'h' },
+		{ "iface",     required_argument, NULL, 'i' },
+		{ "direction", required_argument, NULL, 'd' },
+		{ "cgroup",    required_argument, NULL, 'c' },
+		{ "policy",    required_argument, NULL, 'p' },
+		{ "mode",      required_argument, NULL, 'm' },
+		{ "verbose",   no_argument,       NULL, 'v' },
+		{ "help",      no_argument,       NULL, 'h' },
 		{ 0, 0, 0, 0 }
 	};
 	int c;
 
-	while ((c = getopt_long(argc, argv, "i:c:p:m:vh", longopts, NULL)) != -1) {
+	while ((c = getopt_long(argc, argv, "i:d:c:p:m:vh", longopts, NULL)) != -1) {
 		switch (c) {
 		case 'i': opt->ifname = optarg; break;
 		case 'c': opt->cgroup_path = optarg; break;
+		case 'd':
+			if (strcmp(optarg, "egress") == 0) {
+				opt->direction = SKB_DIR_EGRESS;
+			} else if (strcmp(optarg, "ingress") == 0) {
+				opt->direction = SKB_DIR_INGRESS;
+			} else {
+				fprintf(stderr, "skbouncer: unknown direction '%s'\n",
+					optarg);
+				return -1;
+			}
+			break;
 		case 'p': opt->policy_path = optarg; break;
 		case 'v': opt->verbose = true; break;
 		case 'h': usage(stdout, argv[0]); exit(EXIT_SUCCESS);
@@ -216,10 +236,11 @@ int main(int argc, char **argv)
 	}
 
 	lopts = (struct skb_loader_opts){
-		.ifname   = opt.ifname,
-		.verbose  = opt.verbose,
-		.on_event = on_event,
-		.ctx      = &state,
+		.ifname    = opt.ifname,
+		.direction = opt.direction,
+		.verbose   = opt.verbose,
+		.on_event  = on_event,
+		.ctx       = &state,
 	};
 
 	ldr = skb_loader_open(&lopts);
@@ -230,8 +251,8 @@ int main(int argc, char **argv)
 	       skb_loader_prog_id(ldr), skb_loader_prog_name(ldr));
 	printf("verify with: bpftool prog show id %u\n", skb_loader_prog_id(ldr));
 	if (opt.ifname)
-		printf("watching %s egress for TLS ClientHello; Ctrl-C to stop\n",
-		       opt.ifname);
+		printf("watching %s %s for TLS ClientHello; Ctrl-C to stop\n",
+		       opt.ifname, skb_direction_name(opt.direction));
 	else
 		printf("loaded but not attached (pass -i <dev>); Ctrl-C to unload\n");
 

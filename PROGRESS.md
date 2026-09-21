@@ -257,7 +257,7 @@ restored connectivity, not `skb->sk`.
 
 ## M2.6 — observe container egress at the veth
 
-Status: not started.
+Status: complete.
 
 ### Baseline
 
@@ -274,3 +274,151 @@ Measured 2026-09-21, bridged container (not `--network host`):
 ### Iterations
 
 <!-- append below -->
+
+#### 2026-09-21 — iteration 1
+
+Done and verified on a real bridged container (`curlimages/curl`, 172.17.0.2
+on docker0, never `--network host`). No verifier rejection at any point this
+iteration, so there is no verifier output to quote.
+
+**What changed.** `--direction egress|ingress` (`-d`), default `egress`.
+`skb_loader_opts` carries it; `attach_tc()` picks the attach point and
+`detach_tc()` stores it on the loader so it tears down the same one.
+`struct skb_event` gains `ifindex` and `direction`, so the output names the
+attachment point — `SKB_EVENT_VERSION` 2 -> 3, `SKB_EVENT_HDR_LEN` 44 -> 48
+(offsets 0/8/16/28/32/34/36/38/40/41/42, no implicit padding, ringbuf
+capacity ~4300 records). The program is renamed `skb_egress` -> `skb_tc`:
+one program serves both hooks, and a filter called `skb_egress` sitting on
+`clsact/ingress` would be a misleading artefact to put in the write-up.
+`make verify` updated to match.
+
+The direction reaches the program through a `const volatile __u8 attach_dir`
+in `.rodata`, so `skb_loader_open()` now splits `__open_and_load()` into
+`__open()` / set / `__load()`. A tc program cannot ask the kernel which
+clsact hook it is on, and `.rodata` is only writable before load.
+
+**1. Build.** `make clean && make` clean, no warnings.
+
+**2. Attach.**
+
+    # sudo ./skbouncer -i vethc31576d --direction ingress
+    tc:
+    vethc31576d(59) clsact/ingress skb_tc:[626] id 626
+
+    # tc filter show dev vethc31576d ingress
+    filter protocol all pref 1 bpf chain 0 handle 0x1 skb_tc:[515] \
+        direct-action not_in_hw id 515 tag eeeef53e967a47e0
+
+`bpftool net show dev vethc31576d` is empty again after exit.
+
+**3. Pre-NAT, and one event per handshake.** Three TLS handshakes from
+inside the container, plus two pings and one plain HTTP request:
+
+    TIME(mono)        IFACE        DIR     CGROUP  SOURCE            DEST                 RECORD CAPTURED TRUNC
+    118978.968020918 vethc31576d  ingress 32773   172.17.0.2:51762  172.66.147.243:443     1557     1455 segment
+    118979.487678533 vethc31576d  ingress 32773   172.17.0.2:46772  104.16.133.229:443     1560     1455 segment
+    118979.989367306 vethc31576d  ingress 32773   172.17.0.2:51770  172.66.147.243:443      220      220 none
+
+Three handshakes, three events, no duplicates; ping and HTTP silent. Source
+is `172.17.0.2`, the container's own address, so this is pre-NAT — the same
+handshake at `ens33` egress shows `192.168.86.131`.
+
+**One veth really is one container.** With a second container (`m26b`,
+172.17.0.3, veth `vethff40757`) running at the same time, watching
+`vethff40757` caught only its handshake while `m26` handshook concurrently
+and did not appear. No filtering is needed; the attachment point does it.
+
+**4. Truncation appears here, for the same reason as at `ens33`.**
+`record 1557 captured 1455 segment`. Container MTU is 1500, so MSS is 1460
+and 1460 - 5 = 1455 body bytes travel with the record header; 102 spill
+into the next segment. `--tls-max 1.2` gives a 220-byte record that fits
+whole: `captured 220`, `none`.
+
+That the GSO clamp from M2.5 is doing the work here was measured, not
+assumed — a throwaway build stashed `skb->gso_size`/`gso_segs` in the unused
+`handshake_len`/`legacy_version` fields and was reverted immediately after:
+
+    1557 bytes: gso_size=1460 gso_segs=2
+     220 bytes: gso_size=0    gso_segs=1
+
+So **veth forwards GSO super-packets intact**: the container's stack builds
+one skb spanning both wire segments and `veth_xmit` hands it over without
+segmenting. `skb->len` at veth ingress is as misleading as at `ens33`
+egress, and without the clamp this path would also report `none` for a
+handshake that is genuinely split. `ethtool -k` on the veth: TSO on, GSO on,
+**GRO off** — so nothing is being re-aggregated on the receive side either;
+the super-packet is the sender's, not GRO's. M7 must record veth offload
+state, not just the physical interface's.
+
+**5. No regression at `ens33` egress.** Same run, same binary:
+
+    119025.595486845 ens33  egress 0      192.168.86.131:60492  104.20.23.154:443   1557  1455 segment
+    119025.924149146 ens33  egress 27123  192.168.86.131:35706  104.20.23.154:443   1566  1455 segment
+    119026.202527784 ens33  egress 27123  192.168.86.131:35708  104.20.23.154:443    220   220 none
+
+Container handshake: cgroup 0, SNATed source. Host `curl`: cgroup 27123,
+matching the shell's cgroup inode. Identical to M2.5. Omitting `--direction`
+still attaches to egress.
+
+**6. cgroup_id on the veth ingress path is NOT 0 — and it is the right one.**
+
+This contradicts what the task and CLAUDE.md both expected, so it was
+checked against the filesystem rather than eyeballed:
+
+| container | veth          | event cgroup_id | `stat -c %i` of its `docker-<id>.scope` |
+|-----------|---------------|-----------------|------------------------------------------|
+| m26       | vethc31576d   | 32773           | 32773                                     |
+| m26b      | vethff40757   | 33295           | 33295                                     |
+
+Exact match for both, repeatable across every run this iteration. The
+reason: at veth ingress the skb has only just left the container's socket
+via `veth_xmit` and has **not been orphaned**, so `skb->sk` is still the
+container's socket and `bpf_skb_cgroup_id()` has something to resolve. By
+the time the same packet reaches `ens33` it has been forwarded, `skb->sk` is
+NULL, and the helper returns 0.
+
+**This is the M4 blocker lifting.** The measured note in CLAUDE.md says
+container identity must come from the attachment point because the helper
+returns 0 — true at `ens33`, false at the veth. At the veth both work, which
+means M4 gets a cross-check: resolve the container from the veth *and* from
+the cgroup id, and a disagreement is a bug rather than a silent wrong
+answer. The attachment point stays the primary identity, because it is what
+makes the tuple pre-NAT; `cgroup_id` is now corroboration, not a fallback.
+
+Worth saying plainly: this does not rescue `ens33`. Watching the physical
+interface still cannot attribute a bridged container, and `--direction
+ingress` on a veth remains the only way to get both the identity and the
+pre-NAT tuple.
+
+**`made_hook` still holds with two directions sharing one clsact.**
+Directly exercised: instance A took `vethc31576d` ingress and created the
+qdisc; instance B then took egress on the same device, got `-EEXIST` from
+`bpf_tc_hook_create()` and set `made_hook = false`.
+
+    tc:
+    vethc31576d(59) clsact/ingress skb_tc:[590] id 590
+    vethc31576d(59) clsact/egress  skb_tc:[597] id 597
+
+Killing B left A's ingress filter in place and A went on to deliver a
+ClientHello afterwards; killing A removed clsact and left the device empty.
+So neither direction tears down the other's hook.
+
+B is also a clean re-confirmation of the premise of this milestone: on
+**veth egress** it detected 0 ClientHellos while A on veth ingress detected
+1 from the same handshake.
+
+**Papercut, not fixed.** On the shared-hook path libbpf prints
+`libbpf: Kernel error message: Exclusivity flag on, cannot modify` to
+stderr at WARN level. That is the expected, handled `-EEXIST`, so the
+message is misleading. Pre-existing, not introduced here; left alone
+because filtering libbpf warnings by text risks swallowing real ones.
+
+**Test-harness note for later iterations.** `sudo` on this host is NOPASSWD
+only for `bpftool` and `./skbouncer`, so an unprivileged shell cannot
+`kill -INT` a root skbouncer to make it detach. Ctrl-C works interactively
+because the tty delivers the signal. Non-interactively the signal was sent
+from a `--pid=host` container; `--security-opt apparmor=unconfined` is
+required, as `docker-default` blocks signalling processes outside the
+profile.
+
+- [x] DONE M2.6

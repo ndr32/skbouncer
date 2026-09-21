@@ -9,7 +9,7 @@
 #endif
 
 /* Bump on any layout change to struct skb_event. */
-#define SKB_EVENT_VERSION 2
+#define SKB_EVENT_VERSION 3
 
 #define SKB_MAX_CIPHERS   64	/* verifier needs a bounded walk */
 #define SKB_MAX_VERSIONS  8
@@ -21,6 +21,15 @@ enum skb_stat {
 	SKB_STAT_DETECTED = 0,	/* ClientHello matched */
 	SKB_STAT_DROPPED,	/* bpf_ringbuf_reserve() returned NULL */
 	SKB_STAT__MAX,
+};
+
+/* Which clsact hook the program sits on. Container identity comes from the
+ * attachment point, not from cgroup_id: a bridged container's packet is
+ * already forwarded and SNATed by the time it reaches the physical
+ * interface, so it is watched as INGRESS on the host side of its veth. */
+enum skb_direction {
+	SKB_DIR_EGRESS = 0,
+	SKB_DIR_INGRESS,
 };
 
 enum skb_trunc_reason {
@@ -45,14 +54,17 @@ struct skb_event {
 
 	struct skb_tuple tuple;
 
+	__u32 ifindex;		/* device the hook is on; names the container */
+
 	__u16 record_len;
 	__u16 captured_len;
 	__u16 handshake_len;
 	__u16 legacy_version;
 
 	__u8  trunc_reason;
+	__u8  direction;	/* enum skb_direction */
 	__u8  event_version;
-	__u8  _pad[6];
+	__u8  _pad[5];
 
 	__u8  snapshot[SKB_MAX_SNAPSHOT];
 };

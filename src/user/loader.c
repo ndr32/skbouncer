@@ -9,11 +9,12 @@
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
 
+#include "event.h"
 #include "loader.h"
 #include "skbouncer.skel.h"
 
-/* Our filter on the shared clsact egress hook. Fixed so a stale filter from
- * a killed run is replaced rather than stacked on top of. */
+/* Our filter on the shared clsact hook. Fixed so a stale filter from a
+ * killed run is replaced rather than stacked on top of. */
 #define SKB_TC_HANDLE   1
 #define SKB_TC_PRIORITY 1
 
@@ -24,6 +25,7 @@ struct skb_loader {
 	char prog_name[16];	/* BPF_OBJ_NAME_LEN */
 
 	int ifindex;		/* 0 when not attached */
+	enum bpf_tc_attach_point point;
 	bool made_hook;		/* we created clsact, so we may remove it */
 	bool attached;
 
@@ -64,10 +66,12 @@ static int handle_event(void *ctx, void *data, size_t len)
 }
 
 /* clsact is shared with anything else on the interface, so an existing hook
- * is not an error and must not be torn down on exit. */
-static int attach_tc(struct skb_loader *ldr, const char *ifname)
+ * is not an error and must not be torn down on exit. Both directions live on
+ * that one qdisc; only the filter chain differs. */
+static int attach_tc(struct skb_loader *ldr, const char *ifname,
+		     enum skb_direction dir)
 {
-	LIBBPF_OPTS(bpf_tc_hook, hook, .attach_point = BPF_TC_EGRESS);
+	LIBBPF_OPTS(bpf_tc_hook, hook);
 	LIBBPF_OPTS(bpf_tc_opts, tcopts,
 		    .handle = SKB_TC_HANDLE, .priority = SKB_TC_PRIORITY);
 	int err;
@@ -77,7 +81,9 @@ static int attach_tc(struct skb_loader *ldr, const char *ifname)
 		fprintf(stderr, "skbouncer: no such interface '%s'\n", ifname);
 		return -1;
 	}
+	ldr->point = dir == SKB_DIR_INGRESS ? BPF_TC_INGRESS : BPF_TC_EGRESS;
 	hook.ifindex = ldr->ifindex;
+	hook.attach_point = ldr->point;
 
 	err = bpf_tc_hook_create(&hook);
 	if (err == 0) {
@@ -88,12 +94,12 @@ static int attach_tc(struct skb_loader *ldr, const char *ifname)
 		return -1;
 	}
 
-	tcopts.prog_fd = bpf_program__fd(ldr->skel->progs.skb_egress);
+	tcopts.prog_fd = bpf_program__fd(ldr->skel->progs.skb_tc);
 	tcopts.flags = BPF_TC_F_REPLACE;
 	err = bpf_tc_attach(&hook, &tcopts);
 	if (err) {
-		fprintf(stderr, "skbouncer: cannot attach to %s egress: %s\n",
-			ifname, strerror(-err));
+		fprintf(stderr, "skbouncer: cannot attach to %s %s: %s\n",
+			ifname, skb_direction_name(dir), strerror(-err));
 		if (ldr->made_hook) {
 			hook.attach_point = BPF_TC_EGRESS | BPF_TC_INGRESS;
 			bpf_tc_hook_destroy(&hook);
@@ -108,13 +114,14 @@ static int attach_tc(struct skb_loader *ldr, const char *ifname)
 
 static void detach_tc(struct skb_loader *ldr)
 {
-	LIBBPF_OPTS(bpf_tc_hook, hook, .attach_point = BPF_TC_EGRESS);
+	LIBBPF_OPTS(bpf_tc_hook, hook);
 	LIBBPF_OPTS(bpf_tc_opts, tcopts,
 		    .handle = SKB_TC_HANDLE, .priority = SKB_TC_PRIORITY);
 
 	if (!ldr->ifindex)
 		return;
 	hook.ifindex = ldr->ifindex;
+	hook.attach_point = ldr->point;
 
 	if (ldr->attached)
 		bpf_tc_detach(&hook, &tcopts);
@@ -147,17 +154,30 @@ struct skb_loader *skb_loader_open(const struct skb_loader_opts *opts)
 		ldr->ctx = opts->ctx;
 	}
 
-	ldr->skel = skbouncer_bpf__open_and_load();
+	ldr->skel = skbouncer_bpf__open();
 	if (!ldr->skel) {
-		fprintf(stderr, "skbouncer: failed to load BPF object: %s\n",
+		fprintf(stderr, "skbouncer: failed to open BPF object: %s\n",
 			strerror(errno));
-		if (errno == EPERM)
-			fprintf(stderr, "skbouncer: loading BPF needs root; try sudo\n");
 		free(ldr);
 		return NULL;
 	}
 
-	prog_fd = bpf_program__fd(ldr->skel->progs.skb_egress);
+	/* .rodata is only writable before load, and the program needs the
+	 * direction to label its events. */
+	ldr->skel->rodata->attach_dir = opts ? (__u8)opts->direction
+					     : SKB_DIR_EGRESS;
+
+	if (skbouncer_bpf__load(ldr->skel)) {
+		fprintf(stderr, "skbouncer: failed to load BPF object: %s\n",
+			strerror(errno));
+		if (errno == EPERM)
+			fprintf(stderr, "skbouncer: loading BPF needs root; try sudo\n");
+		skbouncer_bpf__destroy(ldr->skel);
+		free(ldr);
+		return NULL;
+	}
+
+	prog_fd = bpf_program__fd(ldr->skel->progs.skb_tc);
 	err = bpf_prog_get_info_by_fd(prog_fd, &info, &info_len);
 	if (err) {
 		fprintf(stderr, "skbouncer: cannot query program info: %s\n",
@@ -179,7 +199,8 @@ struct skb_loader *skb_loader_open(const struct skb_loader_opts *opts)
 		return NULL;
 	}
 
-	if (opts && opts->ifname && attach_tc(ldr, opts->ifname) != 0) {
+	if (opts && opts->ifname &&
+	    attach_tc(ldr, opts->ifname, opts->direction) != 0) {
 		skb_loader_close(ldr);
 		return NULL;
 	}

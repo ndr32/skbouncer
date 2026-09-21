@@ -63,7 +63,7 @@ clean:
 # Loads the program and shows it, then unloads. Needs root.
 verify: $(BIN)
 	@echo "run in one window:   sudo ./$(BIN)"
-	@echo "then in another:     sudo bpftool prog show name skb_egress"
+	@echo "then in another:     sudo bpftool prog show name skb_tc"
 
 .PHONY: all clean verify
 .DELETE_ON_ERROR:

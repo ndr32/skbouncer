@@ -48,9 +48,17 @@ host address, not `172.17.0.2`. Host-local sockets are fine (measured cgroup_id 
 matching the shell's cgroup inode). The veth and docker0 see nothing at egress, because
 container-outbound traffic is INGRESS on the host side of the veth.
 
-So container identity comes from the attachment point, not from the helper: attach
-BPF_TC_INGRESS to a specific container's veth, where one veth is one container and the
-tuple is still pre-NAT. `--network host` hides this, because there the socket is local.
+So container identity comes from the attachment point: attach BPF_TC_INGRESS to a
+specific container's veth, where one veth is one container and the tuple is still pre-NAT.
+`--network host` hides this, because there the socket is local.
+
+**CORRECTION, MEASURED 2026-09-21 (M2.6).** At *veth ingress* `bpf_skb_cgroup_id()` does
+work: the skb has only just left the container's socket via `veth_xmit` and has not been
+orphaned, so `skb->sk` still resolves. Two concurrent containers reported 32773 and 33295,
+each an exact match for `stat -c %i` of its own `docker-<id>.scope`. The helper returning 0
+is specific to the *forwarded* skb at `ens33`, not to containers in general. The attachment
+point remains the primary identity, because it is what keeps the tuple pre-NAT; the cgroup
+id is a cross-check, so M4 can treat a disagreement between the two as a bug.
 
 **Verifier discipline.** Bounds-check against data_end before EVERY read. Bound all loops
 (`bpf_loop()` available). Cap cipher-suite list at 64 entries.
@@ -69,11 +77,11 @@ OUT: decryption, IPv6 (connect4 is v4-only), Kubernetes / multi-host, Encrypted 
 
 ## Milestones
 
-- M1 - trivial eBPF program builds, loads, appears in `bpftool prog list`  <- CURRENT
+- M1 - trivial eBPF program builds, loads, appears in `bpftool prog list`
 - M2 - tc egress program detects TLS ClientHello (content type 0x16, handshake type 0x01),
        emits {cgroup_id, tuple, len} to a ringbuf. NO PARSING YET.
 - M3 - in-kernel ClientHello walk: cipher suites + supported_versions (ext 0x002b),
-       PLUS a truncation flag from day one (this is the fragmentation dataset)
+       PLUS a truncation flag from day one (this is the fragmentation dataset)  <- CURRENT
 - M4 - cgroup id -> Docker container name in userspace
 - M5 - JSON policy format + userspace policy check + audit mode
 - M6 - enforce mode

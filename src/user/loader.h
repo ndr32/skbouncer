@@ -12,6 +12,7 @@ struct skb_loader;
 
 struct skb_loader_opts {
 	const char *ifname;	/* NULL loads without attaching */
+	enum skb_direction direction;	/* which clsact hook on that device */
 	bool verbose;
 
 	/* Called from skb_loader_poll() for each ringbuf record. */

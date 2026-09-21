@@ -23,6 +23,11 @@
 
 char LICENSE[] SEC("license") = "GPL";
 
+/* Set by the loader before load, from --direction. The program cannot ask
+ * the kernel which clsact hook it sits on, and the answer matters: it is
+ * what identifies the container. See enum skb_direction. */
+const volatile __u8 attach_dir = SKB_DIR_EGRESS;
+
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
 	__uint(max_entries, 1 << 18);	/* 256 KiB */
@@ -46,10 +51,13 @@ static __always_inline void bump(__u32 stat)
 		__sync_fetch_and_add(c, 1);
 }
 
-/* Name must stay <= 15 chars: BPF_OBJ_NAME_LEN is 16 incl. NUL, and a
+/* One program for both clsact hooks - the parse is direction-agnostic, and
+ * a container's outbound handshake arrives on the INGRESS side of its veth.
+ *
+ * Name must stay <= 15 chars: BPF_OBJ_NAME_LEN is 16 incl. NUL, and a
  * longer name shows truncated in bpftool. */
 SEC("tc")
-int skb_egress(struct __sk_buff *skb)
+int skb_tc(struct __sk_buff *skb)
 {
 	void *data     = (void *)(long)skb->data;
 	void *data_end = (void *)(long)skb->data_end;
@@ -62,9 +70,9 @@ int skb_egress(struct __sk_buff *skb)
 	__u16 record_len, captured_len;
 	__u8 tls[TLS_SNIFF_LEN];
 
-	/* L2/L3/L4 headers are always in the linear area at egress, so direct
-	 * access is safe here. The payload is not: tcp_sendmsg parks it in page
-	 * frags, hence bpf_skb_load_bytes() for the TLS bytes below. */
+	/* L2/L3/L4 headers are always in the linear area at either hook, so
+	 * direct access is safe here. The payload is not: tcp_sendmsg parks it
+	 * in page frags, hence bpf_skb_load_bytes() for the TLS bytes below. */
 	if ((void *)(eth + 1) > data_end)
 		return TC_ACT_OK;
 	if (eth->h_proto != bpf_htons(ETH_P_IP))
@@ -128,6 +136,10 @@ int skb_egress(struct __sk_buff *skb)
 	 * and gso_segs=2, i.e. two segments on the wire. Without this clamp
 	 * every handshake looks unfragmented and M7 measures nothing.
 	 *
+	 * The same holds at veth ingress: veth forwards GSO skbs whole, so the
+	 * container's super-packet is still unsegmented when it lands here and
+	 * gso_size carries the container's MSS.
+	 *
 	 * avail >= TLS_SNIFF_LEN on both paths - the length check above for
 	 * the unclamped one, the gso_size guard for the other - so body_len
 	 * is at least 1. skb->len can exceed 64 KiB, but the min() bounds the
@@ -151,9 +163,13 @@ int skb_egress(struct __sk_buff *skb)
 	 * filled yet; clear the header rather than leak stale bytes. */
 	__builtin_memset(ev, 0, SKB_EVENT_HDR_LEN);
 
+	/* Expected to be 0 on a forwarded skb, which has no local socket.
+	 * Recorded rather than relied on: the interface is the identity. */
 	ev->cgroup_id = bpf_skb_cgroup_id(skb);
 	ev->ktime_ns = bpf_ktime_get_ns();
 	ev->tuple = tuple;
+	ev->ifindex = skb->ifindex;
+	ev->direction = attach_dir;
 	ev->record_len = record_len;
 	ev->captured_len = captured_len;
 	ev->trunc_reason = captured_len < record_len ? SKB_TRUNC_SEGMENT
