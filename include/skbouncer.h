@@ -22,6 +22,7 @@ enum skb_trunc_reason {
 	SKB_TRUNC_PARSE,	/* walk stopped early */
 };
 
+/* Everything here is in network byte order, as it sits on the wire. */
 struct skb_tuple {
 	__u32 saddr;
 	__u32 daddr;

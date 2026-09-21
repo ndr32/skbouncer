@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "container.h"
+#include "event.h"
 #include "loader.h"
 #include "policy.h"
 
@@ -30,6 +31,28 @@ static void on_signal(int sig)
 {
 	(void)sig;
 	exiting = 1;
+}
+
+/* No SA_RESTART: the poll loop must see EINTR to notice `exiting`. */
+static int catch_signal(int sig)
+{
+	struct sigaction sa = { .sa_handler = on_signal };
+
+	sigemptyset(&sa.sa_mask);
+	return sigaction(sig, &sa, NULL);
+}
+
+struct run_state {
+	unsigned long events;
+};
+
+static void on_event(void *ctx, const struct skb_event *ev)
+{
+	struct run_state *st = ctx;
+
+	if (st->events++ == 0)
+		skb_event_header(stdout);
+	skb_event_print(stdout, ev);
 }
 
 static void usage(FILE *out, const char *argv0)
@@ -137,10 +160,10 @@ int main(int argc, char **argv)
 	struct options opt = { .mode = MODE_AUDIT };
 	struct skb_loader_opts lopts;
 	struct skb_loader *ldr;
-	sigset_t mask, orig_mask;
+	struct run_state state = {};
 
-	/* Off a tty stdout is block buffered and we then block in sigsuspend(),
-	 * so the prog id would never flush. */
+	/* Off a tty stdout is block buffered and the poll loop then blocks, so
+	 * events would sit unflushed until exit. */
 	setvbuf(stdout, NULL, _IOLBF, 0);
 
 	if (parse_args(argc, argv, &opt) != 0) {
@@ -164,8 +187,10 @@ int main(int argc, char **argv)
 	}
 
 	lopts = (struct skb_loader_opts){
-		.ifname  = opt.ifname,
-		.verbose = opt.verbose,
+		.ifname   = opt.ifname,
+		.verbose  = opt.verbose,
+		.on_event = on_event,
+		.ctx      = &state,
 	};
 
 	ldr = skb_loader_open(&lopts);
@@ -175,28 +200,32 @@ int main(int argc, char **argv)
 	printf("skbouncer: loaded prog id=%u name=%s\n",
 	       skb_loader_prog_id(ldr), skb_loader_prog_name(ldr));
 	printf("verify with: bpftool prog show id %u\n", skb_loader_prog_id(ldr));
-	printf("holding program open; Ctrl-C to unload\n");
+	if (opt.ifname)
+		printf("watching %s egress for TLS ClientHello; Ctrl-C to stop\n",
+		       opt.ifname);
+	else
+		printf("loaded but not attached (pass -i <dev>); Ctrl-C to unload\n");
 
-	signal(SIGINT, on_signal);
-	signal(SIGTERM, on_signal);
-
-	/* Block before testing the flag: pause() would race and miss the
-	 * first Ctrl-C. */
-	sigemptyset(&mask);
-	sigaddset(&mask, SIGINT);
-	sigaddset(&mask, SIGTERM);
-	if (sigprocmask(SIG_BLOCK, &mask, &orig_mask) != 0) {
-		perror("skbouncer: sigprocmask");
+	if (catch_signal(SIGINT) != 0 || catch_signal(SIGTERM) != 0) {
+		perror("skbouncer: sigaction");
 		skb_loader_close(ldr);
 		return EXIT_FAILURE;
 	}
 
-	while (!exiting)
-		sigsuspend(&orig_mask);
+	while (!exiting) {
+		int err = skb_loader_poll(ldr, 200 /* ms */);
 
-	sigprocmask(SIG_SETMASK, &orig_mask, NULL);
+		if (err == -EINTR)
+			break;
+		if (err < 0) {
+			fprintf(stderr, "skbouncer: ringbuf poll failed: %s\n",
+				strerror(-err));
+			skb_loader_close(ldr);
+			return EXIT_FAILURE;
+		}
+	}
 
-	printf("\nskbouncer: unloading\n");
+	printf("\nskbouncer: %lu ClientHello event(s); unloading\n", state.events);
 	skb_loader_close(ldr);
 	return EXIT_SUCCESS;
 }
