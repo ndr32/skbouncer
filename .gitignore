@@ -1,4 +1,6 @@
+build/
+skbouncer
+.loop/
 *.o
 *.skel.h
-skbouncer
 .DS_Store
