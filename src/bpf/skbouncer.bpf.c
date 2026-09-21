@@ -25,8 +25,26 @@ char LICENSE[] SEC("license") = "GPL";
 
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
-	__uint(max_entries, 1 << 18);	/* 256 KiB; ~460 events */
+	__uint(max_entries, 1 << 18);	/* 256 KiB */
 } events SEC(".maps");
+
+/* A plain array, not a per-CPU one: ClientHellos arrive at handshake rate,
+ * so the atomic costs nothing and userspace reads one value per counter
+ * instead of summing across CPUs. */
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, SKB_STAT__MAX);
+	__type(key, __u32);
+	__type(value, __u64);
+} stats SEC(".maps");
+
+static __always_inline void bump(__u32 stat)
+{
+	__u64 *c = bpf_map_lookup_elem(&stats, &stat);
+
+	if (c)
+		__sync_fetch_and_add(c, 1);
+}
 
 /* Name must stay <= 15 chars: BPF_OBJ_NAME_LEN is 16 incl. NUL, and a
  * longer name shows truncated in bpftool. */
@@ -40,8 +58,8 @@ int skb_egress(struct __sk_buff *skb)
 	struct tcphdr *tcp;
 	struct skb_tuple tuple;
 	struct skb_event *ev;
-	__u32 l4_off, pay_off;
-	__u16 record_len;
+	__u32 l4_off, pay_off, avail, seg_len, body_len;
+	__u16 record_len, captured_len;
 	__u8 tls[TLS_SNIFF_LEN];
 
 	/* L2/L3/L4 headers are always in the linear area at egress, so direct
@@ -98,17 +116,48 @@ int skb_egress(struct __sk_buff *skb)
 	if (record_len < TLS_HS_HLEN || record_len > TLS_RECORD_MAX)
 		return TC_ACT_OK;
 
-	ev = bpf_ringbuf_reserve(&events, sizeof(*ev), 0);
-	if (!ev)
+	bump(SKB_STAT_DETECTED);
+
+	/* How much of the record body reaches the peer in the segment that
+	 * carries the record header.
+	 *
+	 * tc egress runs BEFORE segmentation offload, so on a GSO skb
+	 * skb->len spans the whole super-packet rather than one wire segment
+	 * and would overstate what the first segment holds. Measured here: a
+	 * 1557-byte ClientHello arrived as a single skb with gso_size=1460
+	 * and gso_segs=2, i.e. two segments on the wire. Without this clamp
+	 * every handshake looks unfragmented and M7 measures nothing.
+	 *
+	 * avail >= TLS_SNIFF_LEN on both paths - the length check above for
+	 * the unclamped one, the gso_size guard for the other - so body_len
+	 * is at least 1. skb->len can exceed 64 KiB, but the min() bounds the
+	 * result by record_len, itself <= TLS_RECORD_MAX, so __u16 holds. */
+	avail = skb->len - pay_off;
+	seg_len = skb->gso_size;
+	if (seg_len >= TLS_SNIFF_LEN && seg_len < avail)
+		avail = seg_len;
+
+	body_len = avail - TLS_RECORD_HLEN;
+	captured_len = body_len < record_len ? (__u16)body_len : record_len;
+
+	/* Reserve the header only. The size must be a compile-time constant
+	 * for the verifier, and `snapshot` stays empty until M3 fills it. */
+	ev = bpf_ringbuf_reserve(&events, SKB_EVENT_HDR_LEN, 0);
+	if (!ev) {
+		bump(SKB_STAT_DROPPED);
 		return TC_ACT_OK;
+	}
 	/* Reserved ringbuf memory is not zeroed and the M3 fields are not
-	 * filled yet; clear the whole record rather than leak stale bytes. */
-	__builtin_memset(ev, 0, sizeof(*ev));
+	 * filled yet; clear the header rather than leak stale bytes. */
+	__builtin_memset(ev, 0, SKB_EVENT_HDR_LEN);
 
 	ev->cgroup_id = bpf_skb_cgroup_id(skb);
 	ev->ktime_ns = bpf_ktime_get_ns();
 	ev->tuple = tuple;
 	ev->record_len = record_len;
+	ev->captured_len = captured_len;
+	ev->trunc_reason = captured_len < record_len ? SKB_TRUNC_SEGMENT
+						     : SKB_TRUNC_NONE;
 	ev->event_version = SKB_EVENT_VERSION;
 
 	bpf_ringbuf_submit(ev, 0);

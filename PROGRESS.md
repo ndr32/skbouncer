@@ -99,7 +99,7 @@ ones who created it.
 
 ## M2.5 — make the fragmentation signal measurable
 
-Status: not started.
+Status: complete.
 
 ### Baseline
 
@@ -115,3 +115,141 @@ Status: not started.
 ### Iterations
 
 <!-- append below -->
+
+#### 2026-09-21 — iteration 1
+
+All three items done and verified. One deviation from the task text, in
+item 2, described below; it is the interesting part of this iteration.
+
+**Item 1, drop counting.** `stats` is a `BPF_MAP_TYPE_ARRAY` of two `__u64`
+counters (`SKB_STAT_DETECTED`, `SKB_STAT_DROPPED`) bumped with
+`__sync_fetch_and_add`. Not per-CPU: ClientHellos arrive at handshake rate,
+so the atomic costs nothing and userspace reads one value per counter
+instead of summing across CPUs. `main.c` drains the ringbuf once more after
+the signal, then prints detected / delivered / dropped and warns if
+`detected != delivered + dropped`.
+
+**Item 3, record size.** `SKB_EVENT_HDR_LEN` is 44; `sizeof(struct
+skb_event)` is still 560. Ringbuf capacity goes from 468 events to ~4680
+(44 rounds to 48, plus an 8-byte record header, into 256 KiB).
+
+One thing the task text could not have: `bpf_ringbuf_reserve()` takes
+`ARG_CONST_ALLOC_SIZE_OR_ZERO`, so the size must be a compile-time
+constant and `SKB_EVENT_HDR_LEN + captured_len` cannot be passed to it.
+Reserved `SKB_EVENT_HDR_LEN` instead, which is what the task wanted for
+M2.5 anyway (empty snapshot). M3 will need `bpf_ringbuf_output()`, which
+does take a runtime length, to send header + snapshot. Noted in the source.
+`memset` is over `SKB_EVENT_HDR_LEN` too — memsetting `sizeof(*ev)` over a
+44-byte reservation would have been a verifier rejection.
+
+**Item 2, and the deviation: tc egress runs before GSO.**
+
+The formula in the task is `captured_len = min(skb->len - pay_off -
+TLS_RECORD_HLEN, record_len)`. Implemented literally first. Result over the
+docker bridge on ens33:
+
+      RECORD CAPTURED TRUNC
+        1557     1557 none
+         220      220 none
+
+A 1557-byte ClientHello on an interface whose MSS is 1460 reported
+`none`. It cannot fit, so the flag was wrong, and exit criterion 4 was
+unreachable.
+
+Cause: **tc clsact egress runs before segmentation offload.** `ethtool -k
+ens33` has both `tcp-segmentation-offload` and
+`generic-segmentation-offload` on, so a large ClientHello reaches the hook
+as one GSO super-packet and `skb->len` covers *all* the wire segments it
+will be split into, not the first one.
+
+Confirmed rather than assumed, with a throwaway build that stashed
+`skb->gso_size` and `skb->gso_segs` in the unused `handshake_len` /
+`legacy_version` fields (reverted immediately after):
+
+      1557 bytes: gso_size=1460 gso_segs=2
+       220 bytes: gso_size=0    gso_segs=1
+
+So the 1557-byte record really is two segments on the wire, and the hook
+was being asked the wrong question. Fix: clamp the available payload to
+`gso_size` when the skb is a GSO skb.
+
+      avail = skb->len - pay_off;
+      seg_len = skb->gso_size;
+      if (seg_len >= TLS_SNIFF_LEN && seg_len < avail)
+              avail = seg_len;
+      body_len = avail - TLS_RECORD_HLEN;
+      captured_len = min(body_len, record_len);
+
+`avail >= TLS_SNIFF_LEN` on both paths, so `body_len >= 1`; the `min()`
+bounds the result by `record_len <= TLS_RECORD_MAX`, so the `__u16` cannot
+overflow even though `skb->len` can exceed 64 KiB.
+
+**This matters well beyond M2.5.** Without the clamp every handshake on an
+offload-capable interface reports `SKB_TRUNC_NONE` and M7 measures a
+fragmentation rate of zero — the one number this project exists to produce.
+M3 inherits the problem: the body walk must not read past `gso_size` either,
+or it will parse bytes that the peer's TCP receives in a later segment. M7
+must record the offload state (`ethtool -k`) with every result set alongside
+the kernel and OpenSSL versions, because it changes the measurement.
+
+**Results.**
+
+1. `make clean && make` with no warnings and no errors.
+2. `sudo ./skbouncer -i ens33` attaches, no verifier rejection at any
+   point this iteration, so there is no verifier output to quote:
+
+       tc:
+       ens33(2) clsact/egress skb_egress:[454] id 454
+
+   `bpftool net show dev ens33` is empty again after exit, so the detach
+   path still leaves nothing behind.
+3 + 4. Docker bridge networking, no `--network host`:
+
+       RECORD CAPTURED TRUNC
+         1729     1455 segment
+         1557     1455 segment
+          220      220 none
+
+   `docker run --rm curlimages/curl -sI https://example.com` sends a
+   1557-byte record; MSS is 1460, so 1460 - 5 = 1455 body bytes travel in
+   the segment holding the record header and 102 spill into the next one.
+   `SKB_TRUNC_SEGMENT`, consistent. The same command with `--tls-max 1.2`
+   drops the TLS 1.3 key shares, giving a 220-byte record that fits whole:
+   captured 220 = record 220, `SKB_TRUNC_NONE`. Both cases shown from the
+   same interface in the same run.
+5. Exit line:
+
+       skbouncer: 3 ClientHello detected, 3 delivered, 0 dropped
+       (ringbuf full); unloading
+
+**The drop counter was proved to fire, not just to print 0.** With the real
+256 KiB ringbuf it would not: 600 concurrent `curl` processes, then 6000
+loopback handshakes from a threaded Python flooder, both came back
+`6000 detected, 6000 delivered, 0 dropped`. Even a throwaway 4 KiB ringbuf
+(~73 records, the minimum the kernel accepts) did not drop, because the
+200 ms poll loop drains faster than a real network delivers handshakes.
+
+Forced it by stalling the *consumer* instead: sent stdout to a fifo whose
+reader had it open but was not reading, so the 64 KiB pipe filled,
+`fprintf` blocked in the ringbuf callback, and the kernel side backed up.
+With the 4 KiB ringbuf and 6000 handshakes:
+
+       skbouncer: 6000 ClientHello detected, 694 delivered, 5306 dropped
+       (ringbuf full); unloading
+
+694 + 5306 = 6000, so the balance check holds and nothing vanished
+unaccounted for. Before this iteration those 5306 handshakes would have
+been indistinguishable from connections that never happened. Ringbuf
+restored to 256 KiB and everything re-verified on the clean build
+afterwards.
+
+**Still open, unchanged from M2.** `cgroup_id` is 0 for containers on the
+bridge: the ClientHello reaches ens33 egress as a *forwarded* skb with
+`skb->sk == NULL`, so `bpf_skb_cgroup_id()` has nothing to resolve. Visible
+in the results above — the 1729-byte event carries cgroup 27123 because it
+is dockerd's own host socket, while both container handshakes carry 0.
+Detection and fragmentation measurement are unaffected; container
+attribution is not, and this remains the M4 blocker. Fixing the bridge
+restored connectivity, not `skb->sk`.
+
+- [x] DONE M2.5

@@ -3,6 +3,7 @@
 #define SKB_LOADER_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "skbouncer.h"
@@ -23,6 +24,10 @@ uint32_t skb_loader_prog_id(const struct skb_loader *ldr);
 
 /* May be shorter than the C symbol: BPF_OBJ_NAME_LEN is 16 incl. NUL. */
 const char *skb_loader_prog_name(const struct skb_loader *ldr);
+
+/* Reads the kernel-side counters into out[0..SKB_STAT__MAX). `n` is the
+ * length of out[]. Returns 0 or a negative errno. */
+int skb_loader_stats(const struct skb_loader *ldr, uint64_t *out, size_t n);
 
 /* Drains the ringbuf. Returns the number of records handled, or a negative
  * errno; -EINTR just means a signal arrived. */

@@ -45,9 +45,11 @@ static int handle_event(void *ctx, void *data, size_t len)
 	struct skb_loader *ldr = ctx;
 	const struct skb_event *ev = data;
 
-	if (len < sizeof(*ev)) {
+	/* Records are header plus whatever snapshot bytes were filled, so
+	 * anything at least header-length is valid. */
+	if (len < SKB_EVENT_HDR_LEN) {
 		fprintf(stderr, "skbouncer: short event (%zu < %zu), dropping\n",
-			len, sizeof(*ev));
+			len, (size_t)SKB_EVENT_HDR_LEN);
 		return 0;
 	}
 	if (ev->event_version != SKB_EVENT_VERSION) {
@@ -183,6 +185,23 @@ struct skb_loader *skb_loader_open(const struct skb_loader_opts *opts)
 	}
 
 	return ldr;
+}
+
+int skb_loader_stats(const struct skb_loader *ldr, uint64_t *out, size_t n)
+{
+	int fd;
+
+	if (!ldr || !ldr->skel || n < SKB_STAT__MAX)
+		return -EINVAL;
+
+	fd = bpf_map__fd(ldr->skel->maps.stats);
+	for (uint32_t k = 0; k < SKB_STAT__MAX; k++) {
+		int err = bpf_map_lookup_elem(fd, &k, &out[k]);
+
+		if (err)
+			return err;
+	}
+	return 0;
 }
 
 uint32_t skb_loader_prog_id(const struct skb_loader *ldr)

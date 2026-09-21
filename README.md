@@ -28,7 +28,13 @@ sudo ./skbouncer --help
 ```
 
 One line per ClientHello: monotonic timestamp, cgroup id, 4-tuple, TLS
-record length.
+record length, how many body bytes the segment carrying the record header
+actually holds, and why it stopped there (`none` or `segment`).
+
+On exit it prints how many ClientHellos the kernel detected, how many were
+delivered, and how many were lost to a full ringbuf. The last is the
+coverage denominator: a lost event must not look like a connection that
+never happened.
 
 Enforce mode requires `--cgroup` and refuses the root cgroup.
 

@@ -4,6 +4,7 @@
 #include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -53,6 +54,34 @@ static void on_event(void *ctx, const struct skb_event *ev)
 	if (st->events++ == 0)
 		skb_event_header(stdout);
 	skb_event_print(stdout, ev);
+}
+
+/* The detected/delivered/dropped split is the coverage denominator M7
+ * needs: an event lost to a full ringbuf must not look like a connection
+ * that never happened. */
+static void report(const struct skb_loader *ldr, const struct run_state *st)
+{
+	uint64_t stat[SKB_STAT__MAX];
+	int err = skb_loader_stats(ldr, stat, SKB_STAT__MAX);
+
+	if (err) {
+		fprintf(stderr, "\nskbouncer: cannot read counters: %s\n",
+			strerror(-err));
+		printf("skbouncer: %lu ClientHello event(s); unloading\n",
+		       st->events);
+		return;
+	}
+
+	printf("\nskbouncer: %llu ClientHello detected, %lu delivered, "
+	       "%llu dropped (ringbuf full); unloading\n",
+	       (unsigned long long)stat[SKB_STAT_DETECTED], st->events,
+	       (unsigned long long)stat[SKB_STAT_DROPPED]);
+
+	/* Detected but neither delivered nor counted as dropped means the
+	 * loss is somewhere else, which would silently bias M7. */
+	if (stat[SKB_STAT_DETECTED] != st->events + stat[SKB_STAT_DROPPED])
+		fprintf(stderr, "skbouncer: counters do not balance; "
+			"event loss is unaccounted for\n");
 }
 
 static void usage(FILE *out, const char *argv0)
@@ -225,7 +254,12 @@ int main(int argc, char **argv)
 		}
 	}
 
-	printf("\nskbouncer: %lu ClientHello event(s); unloading\n", state.events);
+	/* Anything the kernel submitted just before the signal is still in the
+	 * ringbuf; drain it so the delivered count can be compared with the
+	 * kernel's own tally. */
+	skb_loader_poll(ldr, 0);
+	report(ldr, &state);
+
 	skb_loader_close(ldr);
 	return EXIT_SUCCESS;
 }
