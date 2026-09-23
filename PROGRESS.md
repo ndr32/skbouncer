@@ -504,3 +504,21 @@ Nothing in skbouncer can make this deterministic.
 
 Left clean: no skbouncer process, no skb_tc on any device, test containers
 removed.
+
+## M4 — name the container behind each event
+
+Status: not started. Done when `scripts/verify-M4.sh` passes.
+
+### Baseline
+
+- Against the M3 build: M3 regression passes; every case's `cgroup_id`
+  matches the sender's scope inode; C on the unwatched veth produces
+  nothing; each watched case fails only on `container = None`.
+- Measured: B in A's network namespace leaves through A's veth with A's
+  source IP (172.17.0.3) but carries B's cgroup id (50631 vs A's 50544).
+- `container.c` is a stub: lookup returns NULL, refresh does nothing.
+- One verifier run takes about 26 s, including the M3 regression.
+
+### Iterations
+
+<!-- append below -->

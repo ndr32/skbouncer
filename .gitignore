@@ -4,3 +4,4 @@ skbouncer
 *.o
 *.skel.h
 .DS_Store
+__pycache__/

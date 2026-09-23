@@ -60,9 +60,13 @@ specific container's veth, where one veth is one container and the tuple is stil
 work: the skb has only just left the container's socket via `veth_xmit` and has not been
 orphaned, so `skb->sk` still resolves. Two concurrent containers reported 32773 and 33295,
 each an exact match for `stat -c %i` of its own `docker-<id>.scope`. The helper returning 0
-is specific to the *forwarded* skb at `ens33`, not to containers in general. The attachment
-point remains the primary identity, because it is what keeps the tuple pre-NAT; the cgroup
-id is a cross-check, so M4 can treat a disagreement between the two as a bug.
+is specific to the *forwarded* skb at `ens33`, not to containers in general.
+
+**MEASURED 2026-09-23 - the cgroup id is the container identity, not the veth.** One veth is
+one network namespace. With `--network container:A`, B's traffic leaves through A's veth
+with A's source IP but carries B's cgroup id. So attach at the veth to get the pre-NAT
+tuple, and name the container from the cgroup id. A veth/cgroup disagreement is expected
+for sidecars, not a bug.
 
 **Verifier discipline.** Bounds-check against data_end before EVERY read. Bound all loops
 (`bpf_loop()` available). Cap cipher-suite list at 64 entries.

@@ -52,7 +52,7 @@ guard_clean() {
 		kill -INT "$(ps -o ppid= -p "$p" | tr -d ' ')" 2>/dev/null
 	done
 	sleep 1
-	docker rm -f skb-verify-srv skb-verify-cli >/dev/null 2>&1
+	docker ps -aq --filter name=skb-verify | xargs -r docker rm -f >/dev/null 2>&1
 
 	# Captured, not piped: `bpftool | grep -q` can SIGPIPE and read as clean.
 	if ! net=$(sudo -n bpftool net show 2>/dev/null); then
