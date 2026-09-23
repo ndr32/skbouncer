@@ -553,7 +553,7 @@ containers.
 
 ## M5 — policy and audit mode
 
-Status: done — Done when `scripts/verify-M5.sh` passes.
+Status: done — `scripts/verify-M5.sh` passes.
 
 ### Baseline
 
