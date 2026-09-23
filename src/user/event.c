@@ -24,7 +24,7 @@ static const char *trunc_name(uint8_t reason)
 	switch (reason) {
 	case SKB_TRUNC_NONE:     return "none";
 	case SKB_TRUNC_SEGMENT:  return "segment";
-	case SKB_TRUNC_SNAPSHOT: return "snapshot";
+	case SKB_TRUNC_EXT_LIMIT: return "ext_limit";
 	case SKB_TRUNC_PARSE:    return "parse";
 	default:                 return "?";
 	}

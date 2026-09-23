@@ -173,7 +173,7 @@ static __always_inline __u8 walk_hello(struct __sk_buff *skb,
 		}
 		off += elen;
 	}
-	return SKB_TRUNC_SNAPSHOT;
+	return SKB_TRUNC_EXT_LIMIT;
 }
 
 /* One program for both clsact hooks - the parse is direction-agnostic, and

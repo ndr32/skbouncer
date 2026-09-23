@@ -35,7 +35,7 @@ enum skb_direction {
 enum skb_trunc_reason {
 	SKB_TRUNC_NONE = 0,
 	SKB_TRUNC_SEGMENT,	/* record continues in a later segment */
-	SKB_TRUNC_SNAPSHOT,	/* walk hit SKB_MAX_EXTS before the end */
+	SKB_TRUNC_EXT_LIMIT,	/* walked SKB_MAX_EXTS extensions without reaching the end */
 	SKB_TRUNC_PARSE,	/* malformed: a length points past the record */
 };
 

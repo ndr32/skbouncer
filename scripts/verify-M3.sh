@@ -5,7 +5,7 @@
 #
 # Contract for skbouncer: `--format json` prints one JSON object per event on
 # stdout with at least dport, record_len, captured_len, trunc ("none" |
-# "segment" | "snapshot" | "parse"), legacy_version, versions, ciphers and
+# "segment" | "ext_limit" | "parse"), legacy_version, versions, ciphers and
 # ciphers_capped. Non-JSON lines are ignored.
 #
 # Client and server share docker0, so no internet or gateway is needed.
