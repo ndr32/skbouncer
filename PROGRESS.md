@@ -507,7 +507,7 @@ removed.
 
 ## M4 — name the container behind each event
 
-Status: not started. Done when `scripts/verify-M4.sh` passes.
+Status: done — `scripts/verify-M4.sh` passes.
 
 ### Baseline
 
@@ -522,3 +522,31 @@ Status: not started. Done when `scripts/verify-M4.sh` passes.
 ### Iterations
 
 <!-- append below -->
+
+#### Iteration 1 — resolver via the Engine API
+
+`container.c`: on a miss, `GET /containers/json?all=1` over
+`/var/run/docker.sock` (HTTP/1.0, so no chunking and the body runs to EOF;
+1 s send/receive timeouts bound the stall), parsed with jansson. Each id is
+mapped to the inode of `system.slice/docker-<id>.scope` (or cgroupfs
+`docker/<id>`), plus nested cgroups up to depth 4. The inode is the cgroup
+id, the same thing the verifier stats.
+
+- Entries are kept after a container exits: cgroup ids are not reused
+  within a boot, so a late event from a removed container still resolves.
+- For the same reason a cgroup a successful refresh does not find is
+  cached as a miss (256-slot ring), so host traffic does not hit dockerd
+  per event. A failed refresh is not cached. cgroup_id 0 never refreshes.
+- The cache is warmed at startup; a dockerd failure there only warns.
+- JSON gains `"container"` (string or null) after `cgroup_id`; text gains
+  a CONTAINER column (`-` for none).
+
+Verifier: three consecutive runs,
+
+    PASS: 6 cases, 0 failures      (M3 regression)
+    PASS: 4 cases, 0 failures
+
+B (in A's netns, started after skbouncer) resolved on first sight:
+cgroup 51762 `skb-verify-m4-b` vs A's 51588 `skb-verify-m4-a`, both from
+172.17.0.3 on the same veth. Left clean: no skbouncer, no skb_tc, no test
+containers.

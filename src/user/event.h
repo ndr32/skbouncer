@@ -10,9 +10,11 @@
 const char *skb_direction_name(uint8_t dir);
 
 void skb_event_header(FILE *out);
-void skb_event_print(FILE *out, const struct skb_event *ev);
+/* `container` is the name for ev->cgroup_id, or NULL if it is none. */
+void skb_event_print(FILE *out, const struct skb_event *ev, const char *container);
 
 /* One JSON object per line; no header. */
-void skb_event_print_json(FILE *out, const struct skb_event *ev);
+void skb_event_print_json(FILE *out, const struct skb_event *ev,
+			  const char *container);
 
 #endif /* SKB_EVENT_H */

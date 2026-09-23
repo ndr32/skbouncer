@@ -48,20 +48,22 @@ static int catch_signal(int sig)
 struct run_state {
 	unsigned long events;
 	bool json;
+	struct skb_container_map *containers;
 };
 
 static void on_event(void *ctx, const struct skb_event *ev)
 {
 	struct run_state *st = ctx;
+	const char *name = skb_container_lookup(st->containers, ev->cgroup_id);
 
 	if (st->json) {
 		st->events++;
-		skb_event_print_json(stdout, ev);
+		skb_event_print_json(stdout, ev, name);
 		return;
 	}
 	if (st->events++ == 0)
 		skb_event_header(stdout);
-	skb_event_print(stdout, ev);
+	skb_event_print(stdout, ev, name);
 }
 
 /* The detected/delivered/dropped split is the coverage denominator M7
@@ -264,9 +266,22 @@ int main(int argc, char **argv)
 		.ctx       = &state,
 	};
 
-	ldr = skb_loader_open(&lopts);
-	if (!ldr)
+	/* Warm the cache so the first events cost no round trip to dockerd.
+	 * Failure is not fatal: names are then null until dockerd answers. */
+	state.containers = skb_container_map_new();
+	if (!state.containers) {
+		perror("skbouncer: container map");
 		return EXIT_FAILURE;
+	}
+	if (skb_container_refresh(state.containers) != 0)
+		fprintf(stderr, "skbouncer: cannot list containers via "
+			"/var/run/docker.sock; container names unavailable\n");
+
+	ldr = skb_loader_open(&lopts);
+	if (!ldr) {
+		skb_container_map_free(state.containers);
+		return EXIT_FAILURE;
+	}
 
 	printf("skbouncer: loaded prog id=%u name=%s\n",
 	       skb_loader_prog_id(ldr), skb_loader_prog_name(ldr));
@@ -280,6 +295,7 @@ int main(int argc, char **argv)
 	if (catch_signal(SIGINT) != 0 || catch_signal(SIGTERM) != 0) {
 		perror("skbouncer: sigaction");
 		skb_loader_close(ldr);
+		skb_container_map_free(state.containers);
 		return EXIT_FAILURE;
 	}
 
@@ -292,6 +308,7 @@ int main(int argc, char **argv)
 			fprintf(stderr, "skbouncer: ringbuf poll failed: %s\n",
 				strerror(-err));
 			skb_loader_close(ldr);
+			skb_container_map_free(state.containers);
 			return EXIT_FAILURE;
 		}
 	}
@@ -303,5 +320,6 @@ int main(int argc, char **argv)
 	report(ldr, &state);
 
 	skb_loader_close(ldr);
+	skb_container_map_free(state.containers);
 	return EXIT_SUCCESS;
 }
