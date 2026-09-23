@@ -77,6 +77,10 @@ guard_clean() {
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
 	cd "$(dirname "$0")/.."
+	if [[ -f .loop/loop.pid ]] && kill -0 "$(cat .loop/loop.pid)" 2>/dev/null; then
+		echo "guard: a loop is running (pid $(cat .loop/loop.pid)); not touching anything" >&2
+		exit 1
+	fi
 	case "${1:-check}" in
 		init)  guard_init ;;
 		check) guard_check manual && guard_clean manual && echo "guard: ok" ;;
