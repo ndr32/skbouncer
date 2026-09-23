@@ -47,11 +47,9 @@ static int handle_event(void *ctx, void *data, size_t len)
 	struct skb_loader *ldr = ctx;
 	const struct skb_event *ev = data;
 
-	/* Records are header plus whatever snapshot bytes were filled, so
-	 * anything at least header-length is valid. */
-	if (len < SKB_EVENT_HDR_LEN) {
+	if (len < sizeof(*ev)) {
 		fprintf(stderr, "skbouncer: short event (%zu < %zu), dropping\n",
-			len, (size_t)SKB_EVENT_HDR_LEN);
+			len, sizeof(*ev));
 		return 0;
 	}
 	if (ev->event_version != SKB_EVENT_VERSION) {

@@ -18,7 +18,7 @@ const char *skb_direction_name(uint8_t dir)
 	return dir == SKB_DIR_INGRESS ? "ingress" : "egress";
 }
 
-/* Short enough to stay in one column; M3 adds the SNAPSHOT/PARSE cases. */
+/* Short enough to stay in one column. Also the JSON `trunc` values. */
 static const char *trunc_name(uint8_t reason)
 {
 	switch (reason) {
@@ -35,9 +35,9 @@ static const char *trunc_name(uint8_t reason)
  * forwarded, which is every bridged container at a physical interface. */
 void skb_event_header(FILE *out)
 {
-	fprintf(out, "%-18s %-15s %-7s %-10s %-21s %-21s %6s %8s %s\n",
+	fprintf(out, "%-18s %-15s %-7s %-10s %-21s %-21s %6s %8s %-8s %-6s %7s %s\n",
 		"TIME(mono)", "IFACE", "DIR", "CGROUP", "SOURCE", "DEST",
-		"RECORD", "CAPTURED", "TRUNC");
+		"RECORD", "CAPTURED", "TRUNC", "LEGACY", "CIPHERS", "VERSIONS");
 }
 
 void skb_event_print(FILE *out, const struct skb_event *ev)
@@ -60,11 +60,46 @@ void skb_event_print(FILE *out, const struct skb_event *ev)
 		 ntohs(ev->tuple.dport));
 
 	/* __u64 is unsigned long long here, so PRIu64 ("lu") would not match. */
-	fprintf(out, "%6llu.%09llu %-15s %-7s %-10llu %-21s %-21s %6u %8u %s\n",
+	fprintf(out, "%6llu.%09llu %-15s %-7s %-10llu %-21s %-21s %6u %8u %-8s %04x %6u%s ",
 		(unsigned long long)(ev->ktime_ns / 1000000000ULL),
 		(unsigned long long)(ev->ktime_ns % 1000000000ULL),
 		ifname, skb_direction_name(ev->direction),
 		(unsigned long long)ev->cgroup_id, sbuf, dbuf,
 		ev->record_len, ev->captured_len,
-		trunc_name(ev->trunc_reason));
+		trunc_name(ev->trunc_reason), ev->legacy_version,
+		ev->n_ciphers, ev->ciphers_capped ? "+" : " ");
+	for (unsigned i = 0; i < ev->n_versions && i < SKB_MAX_VERSIONS; i++)
+		fprintf(out, "%s%04x", i ? "," : "", ntohs(ev->versions[i]));
+	fprintf(out, "%s\n", ev->n_versions ? "" : "-");
+}
+
+static void u16_array(FILE *out, const __u16 *v, unsigned n, unsigned max)
+{
+	fputc('[', out);
+	for (unsigned i = 0; i < n && i < max; i++)
+		fprintf(out, "%s%u", i ? "," : "", ntohs(v[i]));
+	fputc(']', out);
+}
+
+void skb_event_print_json(FILE *out, const struct skb_event *ev)
+{
+	char src[INET_ADDRSTRLEN], dst[INET_ADDRSTRLEN];
+
+	fprintf(out, "{\"ktime_ns\":%llu,\"ifindex\":%u,\"direction\":\"%s\","
+		"\"cgroup_id\":%llu,\"saddr\":\"%s\",\"sport\":%u,"
+		"\"daddr\":\"%s\",\"dport\":%u,\"record_len\":%u,"
+		"\"captured_len\":%u,\"trunc\":\"%s\",\"handshake_len\":%u,"
+		"\"legacy_version\":%u,\"versions\":",
+		(unsigned long long)ev->ktime_ns, ev->ifindex,
+		skb_direction_name(ev->direction),
+		(unsigned long long)ev->cgroup_id,
+		ip4(src, ev->tuple.saddr), ntohs(ev->tuple.sport),
+		ip4(dst, ev->tuple.daddr), ntohs(ev->tuple.dport),
+		ev->record_len, ev->captured_len, trunc_name(ev->trunc_reason),
+		ev->handshake_len, ev->legacy_version);
+	u16_array(out, ev->versions, ev->n_versions, SKB_MAX_VERSIONS);
+	fputs(",\"ciphers\":", out);
+	u16_array(out, ev->ciphers, ev->n_ciphers, SKB_MAX_CIPHERS);
+	fprintf(out, ",\"ciphers_capped\":%s}\n",
+		ev->ciphers_capped ? "true" : "false");
 }

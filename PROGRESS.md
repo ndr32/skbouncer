@@ -444,3 +444,62 @@ Status: not started. Done when `scripts/verify-M3.sh` passes.
 ### Iterations
 
 <!-- append below -->
+
+#### Iteration 1 — walk implemented; verifier passes, but its attach probe is racy
+
+**What changed.** `struct skb_event` loses the 512-byte `snapshot` and gains
+`ciphers[64]`, `versions[8]` (both raw big-endian, wire order),
+`n_ciphers`, `n_versions`, `ciphers_capped`; `handshake_len` and
+`legacy_version` are now filled. Record is 216 bytes, reserved whole.
+`SKB_EVENT_VERSION` 3 → 4. `SKB_TRUNC_SNAPSHOT` is repurposed to mean "walk
+hit `SKB_MAX_EXTS` (32) extensions before the end"; `PARSE` means a length
+points past a fully captured record.
+
+`walk_hello()` reads nothing at or past `hs + captured_len`, so the
+`gso_size` clamp from M2.5 bounds the walk as well as the length. Cipher
+suites and versions are each one `bpf_skb_load_bytes()` of a bounded
+variable length, cut to what the segment holds; the extension walk is a
+plain bounded loop. Any running-out-of-segment becomes `SEGMENT`, and the
+caller forces `SEGMENT` whenever `captured_len < record_len`, so the
+"captured < record iff trunc == segment" invariant holds by construction.
+Loads in ~0.17 s, 3776 B xlated.
+
+`--format json|text` added (`-f`); text stays the default and gains
+LEGACY, CIPHERS (`+` when capped) and VERSIONS columns.
+
+**Verifier results.** Three runs: PASS, then twice
+`verify: skbouncer never attached to veth… ingress`.
+
+The passing run, for the record:
+
+    PASS: 6 cases, 0 failures
+    default_pqc: record_len 1519, captured_len 1443, trunc "segment",
+                 versions [772,771], 30 ciphers
+    cipher_cap:  64 ciphers, ciphers_capped true
+    skbouncer: 5 ClientHello detected, 5 delivered, 0 dropped
+
+**I believe the verifier is wrong, and am stopping as the rules say.**
+`scripts/verify-M3.sh` runs under `set -o pipefail` and probes with
+
+    sudo -n bpftool net show dev "$VETH" 2>/dev/null | grep -q skb_tc
+
+`grep -q` exits on the first match; `bpftool` is still writing the
+`flow_dissector:` / `netfilter:` sections and dies of SIGPIPE, so the
+pipeline returns 141 even though the filter is there. Measured against a
+veth with skbouncer attached throughout:
+
+    pipefail:    ok=24 bad=16 last_rc=141   (40 probes)
+    no pipefail: ok=40/40
+
+The failed run's journal matches: one probe succeeded and broke the loop,
+the re-check after the loop hit SIGPIPE and died, and it did so about 1 s
+after attach, with skbouncer still up and `loader.err` empty.
+
+Fix (needs a human, then `scripts/guard.sh init`): drop `-q` so grep reads
+all of its input (`grep skb_tc >/dev/null`), or capture first:
+`out=$(sudo -n bpftool net show dev "$VETH" 2>/dev/null); grep -q skb_tc <<<"$out"`.
+Both probe sites need it, the one in the loop and the one after it.
+Nothing in skbouncer can make this deterministic.
+
+Left clean: no skbouncer process, no skb_tc on any device, test containers
+removed.
