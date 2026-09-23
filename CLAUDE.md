@@ -75,6 +75,8 @@ for sidecars, not a bug.
 lock the author out. Scope to a specific container cgroup path
 (/sys/fs/cgroup/system.slice/docker-<id>.scope) and make that a REQUIRED CLI arg with no
 default. Take a VMware snapshot before every enforce-mode experiment.
+Enforce mode also refuses any interface that is not a veth (policy/README.md), so the
+host's own traffic is never in the path.
 
 ## Scope (from the proposal - do not silently expand)
 

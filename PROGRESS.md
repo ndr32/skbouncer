@@ -603,3 +603,22 @@ The TLS 1.2-only client sends no supported_versions, and versions_seen=true
 there shows the absence proof works. A cut landing before supported_versions
 (should give unknown when min_version is set) was untested; verify-M5.sh
 now covers it with a long ALPN list, both unknown and violation-despite-cut. Left clean: no skbouncer, no skb_tc, no test containers.
+
+## M6 — enforce mode
+
+Status: not started. Done when `scripts/verify-M6.sh` passes.
+
+### Baseline
+
+- `--mode enforce` exits with "enforce mode not implemented". The
+  `--cgroup` and root-cgroup refusals already work; the no-policy and
+  non-veth refusals do not.
+- The M5 build rejects `on_unknown` as an unknown policy key.
+- Audit-mode dry run of the harness: all nine connections establish and
+  every server logs its ClientHello. A ClientHello dropped by iptables in
+  a test container reads as not established and not received.
+- One verifier run takes about 70 s including the M5, M4 and M3 regressions.
+
+### Iterations
+
+<!-- append below -->

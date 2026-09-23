@@ -1,4 +1,4 @@
-# Loop task: M5 — policy and audit mode
+# Loop task: M6 — enforce mode
 
 Read `CLAUDE.md` for scope and safety rules; they override this file.
 Read `PROGRESS.md` — you have no memory of earlier iterations. The loop
@@ -6,33 +6,42 @@ appends the verifier's verdict there after every iteration.
 
 ## Goal
 
-Implement `policy/README.md`: load a JSON policy with `-p FILE` and give
-every event a verdict in audit mode. Nothing is blocked yet; that is M6.
+Implement the Enforcement section of `policy/README.md`: with
+`--mode enforce`, drop violating ClientHellos in the kernel, so they never
+reach the server.
 
-- JSON output gains `"verdict"`: `"allow"`, `"violation"` or `"unknown"`,
-  present whenever a policy is loaded. Show it in text output too.
-- A malformed policy or an unknown cipher name makes skbouncer exit non-zero
-  before loading BPF, with an error naming the file position or the bad name.
-- `src/user/policy.{c,h}` exist as stubs with jansson already wired in. Change
-  the interface if it needs the container name; nothing outside `src/` is
-  bound to it.
+- Decide in the kernel. A verdict computed in userspace arrives after the
+  ClientHello has left, and the verifier checks from the server's side
+  that a blocked ClientHello never arrived. So userspace compiles the policy,
+  with container names resolved to cgroup ids, into maps the tc program
+  reads, and keeps them current.
+- Honour `on_unknown` (default `"allow"`): `unknown` is blocked only when it
+  is `"block"`.
+- Only enforce within `--cgroup PATH` and its descendants
+  (`bpf_skb_ancestor_cgroup_id()` works from tc). Other cgroups on the same
+  veth get a verdict but always pass.
+- Refuse to start in enforce mode without `--cgroup`, with the root cgroup,
+  without `-p`, or on an interface that is not a veth.
+- JSON events gain `"action"`: `"block"` or `"pass"`, which is what the
+  kernel actually did. It must agree with the userspace `"verdict"`.
 
-The hard part is `unknown`. A truncated record is not automatically
-`unknown`: if the cipher list and versions were read in full before the cut,
-the verdict is certain. Userspace cannot currently tell a fully read list
-from one cut by the segment boundary, so the kernel will need to say so.
+## Done means `scripts/verify-M6.sh` passes
 
-## Done means `scripts/verify-M5.sh` passes
+It runs `verify-M5.sh` first (which runs M4 and M3), checks the four
+refusals, then drives nine handshakes over one veth shared by three
+containers, with enforcement scoped to one of them. The cases are:
+- violations that must be blocked;
+- a split post-quantum ClientHello that must pass;
+- an `unknown` that passes by default, then is blocked with
+  `on_unknown: block`;
+- out-of-scope violations that must pass.
 
-It runs `verify-M4.sh` first (which runs M3). Then it checks two bad policy
-files are rejected, and nine handshakes from five containers sharing one
-veth get the verdicts `policy/README.md` prescribes — including a 1833-byte
-post-quantum ClientHello that splits but must still be `allow`, and a
-64-of-83-ciphers case that must be `unknown`. Run it as often as you like;
-the loop ends when it passes.
+Run it as often as you like; the loop ends when it passes.
 
 ## Rules
 
+- Enforce only on test-container veths. Never run enforce mode on `ens33`,
+  `tailscale0` or `docker0`; the non-veth refusal is tested on `lo`.
 - Never edit `scripts/verify-*.sh`, `tests/`, `policy/README.md`,
   `scripts/loop.sh` or `scripts/guard.sh`. If you believe the verifier or
   the spec is wrong, say so in `PROGRESS.md` and stop.
