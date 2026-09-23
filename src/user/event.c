@@ -30,17 +30,17 @@ static const char *trunc_name(uint8_t reason)
 	}
 }
 
-/* The attachment point is what identifies the container, so it leads the
- * line. CGROUP stays, but only as a measurement: it is 0 for anything
- * forwarded, which is every bridged container at a physical interface. */
+/* The cgroup id, not the veth, identifies the container: containers sharing
+ * a network namespace share one veth. It is 0 for anything forwarded,
+ * which is every bridged container at a physical interface. */
 void skb_event_header(FILE *out)
 {
-	fprintf(out, "%-18s %-15s %-7s %-10s %-21s %-21s %6s %8s %-8s %-6s %7s %s\n",
-		"TIME(mono)", "IFACE", "DIR", "CGROUP", "SOURCE", "DEST",
+	fprintf(out, "%-18s %-15s %-7s %-10s %-20s %-21s %-21s %6s %8s %-8s %-6s %7s %s\n",
+		"TIME(mono)", "IFACE", "DIR", "CGROUP", "CONTAINER", "SOURCE", "DEST",
 		"RECORD", "CAPTURED", "TRUNC", "LEGACY", "CIPHERS", "VERSIONS");
 }
 
-void skb_event_print(FILE *out, const struct skb_event *ev)
+void skb_event_print(FILE *out, const struct skb_event *ev, const char *container)
 {
 	char src[INET_ADDRSTRLEN], dst[INET_ADDRSTRLEN];
 	char sbuf[INET_ADDRSTRLEN + 8], dbuf[INET_ADDRSTRLEN + 8];
@@ -60,12 +60,12 @@ void skb_event_print(FILE *out, const struct skb_event *ev)
 		 ntohs(ev->tuple.dport));
 
 	/* __u64 is unsigned long long here, so PRIu64 ("lu") would not match. */
-	fprintf(out, "%6llu.%09llu %-15s %-7s %-10llu %-21s %-21s %6u %8u %-8s %04x %6u%s ",
+	fprintf(out, "%6llu.%09llu %-15s %-7s %-10llu %-20s %-21s %-21s %6u %8u %-8s %04x %6u%s ",
 		(unsigned long long)(ev->ktime_ns / 1000000000ULL),
 		(unsigned long long)(ev->ktime_ns % 1000000000ULL),
 		ifname, skb_direction_name(ev->direction),
-		(unsigned long long)ev->cgroup_id, sbuf, dbuf,
-		ev->record_len, ev->captured_len,
+		(unsigned long long)ev->cgroup_id, container ? container : "-",
+		sbuf, dbuf, ev->record_len, ev->captured_len,
 		trunc_name(ev->trunc_reason), ev->legacy_version,
 		ev->n_ciphers, ev->ciphers_capped ? "+" : " ");
 	for (unsigned i = 0; i < ev->n_versions && i < SKB_MAX_VERSIONS; i++)
@@ -81,18 +81,42 @@ static void u16_array(FILE *out, const __u16 *v, unsigned n, unsigned max)
 	fputc(']', out);
 }
 
-void skb_event_print_json(FILE *out, const struct skb_event *ev)
+/* Docker names are [a-zA-Z0-9][a-zA-Z0-9_.-]+, but escape anyway. */
+static void json_str(FILE *out, const char *s)
+{
+	if (!s) {
+		fputs("null", out);
+		return;
+	}
+	fputc('"', out);
+	for (; *s; s++) {
+		unsigned char c = *s;
+
+		if (c == '"' || c == '\\')
+			fprintf(out, "\\%c", c);
+		else if (c < 0x20)
+			fprintf(out, "\\u%04x", c);
+		else
+			fputc(c, out);
+	}
+	fputc('"', out);
+}
+
+void skb_event_print_json(FILE *out, const struct skb_event *ev,
+			  const char *container)
 {
 	char src[INET_ADDRSTRLEN], dst[INET_ADDRSTRLEN];
 
 	fprintf(out, "{\"ktime_ns\":%llu,\"ifindex\":%u,\"direction\":\"%s\","
-		"\"cgroup_id\":%llu,\"saddr\":\"%s\",\"sport\":%u,"
+		"\"cgroup_id\":%llu,\"container\":",
+		(unsigned long long)ev->ktime_ns, ev->ifindex,
+		skb_direction_name(ev->direction),
+		(unsigned long long)ev->cgroup_id);
+	json_str(out, container);
+	fprintf(out, ",\"saddr\":\"%s\",\"sport\":%u,"
 		"\"daddr\":\"%s\",\"dport\":%u,\"record_len\":%u,"
 		"\"captured_len\":%u,\"trunc\":\"%s\",\"handshake_len\":%u,"
 		"\"legacy_version\":%u,\"versions\":",
-		(unsigned long long)ev->ktime_ns, ev->ifindex,
-		skb_direction_name(ev->direction),
-		(unsigned long long)ev->cgroup_id,
 		ip4(src, ev->tuple.saddr), ntohs(ev->tuple.sport),
 		ip4(dst, ev->tuple.daddr), ntohs(ev->tuple.dport),
 		ev->record_len, ev->captured_len, trunc_name(ev->trunc_reason),
