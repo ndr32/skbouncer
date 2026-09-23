@@ -33,14 +33,17 @@ static const char *trunc_name(uint8_t reason)
 /* The cgroup id, not the veth, identifies the container: containers sharing
  * a network namespace share one veth. It is 0 for anything forwarded,
  * which is every bridged container at a physical interface. */
-void skb_event_header(FILE *out)
+void skb_event_header(FILE *out, bool verdict)
 {
+	if (verdict)
+		fprintf(out, "%-9s ", "VERDICT");
 	fprintf(out, "%-18s %-15s %-7s %-10s %-20s %-21s %-21s %6s %8s %-8s %-6s %7s %s\n",
 		"TIME(mono)", "IFACE", "DIR", "CGROUP", "CONTAINER", "SOURCE", "DEST",
 		"RECORD", "CAPTURED", "TRUNC", "LEGACY", "CIPHERS", "VERSIONS");
 }
 
-void skb_event_print(FILE *out, const struct skb_event *ev, const char *container)
+void skb_event_print(FILE *out, const struct skb_event *ev, const char *container,
+		     const char *verdict)
 {
 	char src[INET_ADDRSTRLEN], dst[INET_ADDRSTRLEN];
 	char sbuf[INET_ADDRSTRLEN + 8], dbuf[INET_ADDRSTRLEN + 8];
@@ -59,6 +62,8 @@ void skb_event_print(FILE *out, const struct skb_event *ev, const char *containe
 	snprintf(dbuf, sizeof(dbuf), "%s:%u", ip4(dst, ev->tuple.daddr),
 		 ntohs(ev->tuple.dport));
 
+	if (verdict)
+		fprintf(out, "%-9s ", verdict);
 	/* __u64 is unsigned long long here, so PRIu64 ("lu") would not match. */
 	fprintf(out, "%6llu.%09llu %-15s %-7s %-10llu %-20s %-21s %-21s %6u %8u %-8s %04x %6u%s ",
 		(unsigned long long)(ev->ktime_ns / 1000000000ULL),
@@ -103,7 +108,7 @@ static void json_str(FILE *out, const char *s)
 }
 
 void skb_event_print_json(FILE *out, const struct skb_event *ev,
-			  const char *container)
+			  const char *container, const char *verdict)
 {
 	char src[INET_ADDRSTRLEN], dst[INET_ADDRSTRLEN];
 
@@ -124,6 +129,11 @@ void skb_event_print_json(FILE *out, const struct skb_event *ev,
 	u16_array(out, ev->versions, ev->n_versions, SKB_MAX_VERSIONS);
 	fputs(",\"ciphers\":", out);
 	u16_array(out, ev->ciphers, ev->n_ciphers, SKB_MAX_CIPHERS);
-	fprintf(out, ",\"ciphers_capped\":%s}\n",
-		ev->ciphers_capped ? "true" : "false");
+	fprintf(out, ",\"ciphers_capped\":%s,\"ciphers_seen\":%s,\"versions_seen\":%s",
+		ev->ciphers_capped ? "true" : "false",
+		ev->seen & SKB_SEEN_CIPHERS ? "true" : "false",
+		ev->seen & SKB_SEEN_VERSIONS ? "true" : "false");
+	if (verdict)
+		fprintf(out, ",\"verdict\":\"%s\"", verdict);
+	fputs("}\n", out);
 }

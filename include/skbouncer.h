@@ -9,7 +9,7 @@
 #endif
 
 /* Bump on any layout change to struct skb_event. */
-#define SKB_EVENT_VERSION 4
+#define SKB_EVENT_VERSION 5
 
 #define SKB_MAX_CIPHERS   64	/* verifier needs a bounded walk */
 #define SKB_MAX_VERSIONS  8
@@ -30,6 +30,14 @@ enum skb_stat {
 enum skb_direction {
 	SKB_DIR_EGRESS = 0,
 	SKB_DIR_INGRESS,
+};
+
+/* Which lists the walk read in full. trunc_reason says the record was cut;
+ * these say whether the cut mattered. A verdict is only certain for a list
+ * seen whole. */
+enum skb_seen {
+	SKB_SEEN_CIPHERS  = 1 << 0,	/* every offered cipher is in ciphers[] */
+	SKB_SEEN_VERSIONS = 1 << 1,	/* supported_versions read whole, or known absent */
 };
 
 enum skb_trunc_reason {
@@ -67,7 +75,8 @@ struct skb_event {
 	__u8  n_ciphers;	/* entries filled in ciphers[] */
 	__u8  n_versions;	/* entries filled in versions[]; 0 = absent */
 	__u8  ciphers_capped;	/* offered more than SKB_MAX_CIPHERS */
-	__u8  _pad[2];
+	__u8  seen;		/* enum skb_seen */
+	__u8  _pad;
 
 	/* Wire order, and still big-endian: userspace swaps. */
 	__u16 ciphers[SKB_MAX_CIPHERS];
