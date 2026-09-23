@@ -29,6 +29,10 @@ Two modes: **audit** (log violations) and **enforce** (block).
 - clang 21.1.8 | libbpf-dev 1.6.3 | bpftool 7.7.0 | Docker | BTF present at /sys/kernel/btf/vmlinux
 - `src/vmlinux.h` already generated (167k lines)
 - NOTE: proposal S1.5.1 says "Ubuntu 24.04, kernel 6.8" - stale, fix at write-up time.
+- VM suspend breaks container networking: open-vm-tools' suspend hook flushes every NIC's
+  addresses, and on resume only ens33 is reconfigured, so docker0 loses 172.17.0.1.
+  Fix after the fact: `sudo systemctl restart docker`. Prevent it:
+  `sudo vmware-toolbox-cmd script suspend disable` (and `resume`). Also costs chrony sync.
 
 ## Critical design decisions
 
@@ -95,7 +99,19 @@ For the PQC arm: Ubuntu's stock OpenSSL will not produce large enough ClientHell
 Use OpenSSL 3.5+ (ML-KEM, hybrid X25519MLKEM768) in a container to generate genuinely
 oversized handshakes rather than synthesising them with padding.
 
-Record exact kernel + OpenSSL versions with every result set.
+Record exact kernel + OpenSSL versions with every result set, plus `ethtool -k` offload
+state (TSO/GSO/GRO) of the veth under test: veth forwards GSO super-packets intact, so
+segment boundaries depend on it. Do not suspend the VM during a capture campaign.
+
+Measured baseline (OpenSSL 3.5.8, stock client): default X25519MLKEM768 ClientHello is
+1519 bytes and spans two segments; the same client with X25519 only is 285 bytes.
+
+## Development loop
+
+`MILESTONE=M3 scripts/loop.sh` runs PROMPT.md with fresh context per iteration on branch
+`loop/<M>`. It ends when `scripts/verify-<M>.sh` passes. The verifier, `tests/`, and the
+loop scripts are fingerprinted by `scripts/guard.sh`; an iteration that edits them aborts
+the run. After a deliberate change to them: `scripts/guard.sh init`.
 
 ## Access
 

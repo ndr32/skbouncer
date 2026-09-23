@@ -1,66 +1,56 @@
-# Loop task: M2.6 — observe container egress at the veth
+# Loop task: M3 — walk the ClientHello in the kernel
 
-Read `CLAUDE.md` for scope and safety rules; they override this file. Note
-the MEASURED note about cgroup attribution — it is the reason for this task.
-Read `PROGRESS.md` — you have no memory of earlier iterations.
-
-## Why
-
-Measured on 2026-09-21: at `ens33` egress a bridged container's packet is
-already forwarded and SNATed, so `bpf_skb_cgroup_id()` returns 0 and the
-tuple shows the host address. The veth and docker0 see nothing at egress,
-because container-outbound traffic is INGRESS on the host side of the veth.
-
-The loader only ever attaches `BPF_TC_EGRESS`, so today the tool can observe
-a container handshake or attribute it, never both.
+Read `CLAUDE.md` for scope and safety rules; they override this file.
+Read `PROGRESS.md` — you have no memory of earlier iterations. The loop
+appends the verifier's verdict there after every iteration.
 
 ## Goal
 
-Support attaching to `BPF_TC_INGRESS` as well, so the program can watch a
-container's veth and see its outbound handshakes pre-NAT.
+Extend the tc program so each ClientHello event also carries:
 
-1. Add a direction to `skb_loader_opts` and a CLI flag, e.g.
-   `--direction egress|ingress` defaulting to `egress`.
-2. `attach_tc()` and `detach_tc()` must use the chosen attach point. Keep
-   the existing `made_hook` behaviour: clsact is shared, so do not destroy a
-   hook this process did not create.
-3. Record which direction produced an event. Container identity comes from
-   the attachment point, not from `cgroup_id`, so the output must make the
-   interface visible.
+- `legacy_version`
+- the cipher suite list, in wire order, capped at 64 with a flag when capped
+- the `supported_versions` extension (0x002b), if present
 
-Do not parse the ClientHello body. That is still M3.
+Keep `captured_len` and `trunc_reason` correct as the walk goes deeper: when
+the walk needs bytes beyond what this segment carries, report what was seen
+and mark it truncated. Those events are the fragmentation dataset — never
+drop them.
 
-## Exit criterion
+Add `--format json`: one JSON object per event on stdout. The verifier
+needs these keys, with these names:
 
-Verify each, do not assume. Use a real bridged container — not
-`--network host`, which hides the whole problem.
+    dport record_len captured_len trunc legacy_version
+    versions ciphers ciphers_capped
 
-1. `make` clean, no new warnings.
-2. `sudo ./skbouncer -i <veth> --direction ingress` attaches without
-   verifier rejection, and `bpftool net show dev <veth>` shows it on the
-   ingress hook.
-3. A handshake from inside that container produces exactly one event, whose
-   source address is the container's `172.17.x.x` — proving it is pre-NAT.
-4. `record_len`, `captured_len` and `trunc_reason` are still correct on this
-   path. State whether truncation appears here and why.
-5. Egress on `ens33` still behaves as before; this must not regress.
-6. Report what `cgroup_id` actually is on the veth ingress path. Do not
-   assume it is useful — measure it and write down the value.
-7. `PROGRESS.md` contains `- [x] DONE M2.6` as a top-level line.
+`trunc` is a string: "none", "segment", "snapshot" or "parse". `versions`
+and `ciphers` are arrays of integers. Keep the existing text output as the
+default.
 
-Finding the veth for a container:
+## Done means `scripts/verify-M3.sh` passes
 
-    IDX=$(docker exec <cid> cat /sys/class/net/eth0/iflink)
-    ip -o link | awk -v i="$IDX" -F': ' '$1+0==i {split($2,a,"@"); print a[1]}'
+It attaches to a client container's veth ingress, sends six handshakes to
+TLS servers in a second container, and compares your events with the
+ClientHellos the servers logged. Cases include TLS 1.2 and 1.3, 83 offered
+ciphers (the cap), a 1519-byte post-quantum ClientHello that spans two
+segments, and plaintext that must produce nothing.
+
+Run it yourself as often as you like; its output says exactly what is
+wrong. The loop ends when it passes. Do not write a DONE line.
 
 ## Rules
 
-- Never regenerate `src/bpf/vmlinux.h`.
-- Never run `apt`, `apt-get`, `apt-mark`.
-- Never attach to the root cgroup.
-- Bounds-check against `data_end` before every read; bound every loop.
+- Never edit `scripts/verify-M3.sh`, `tests/`, `scripts/loop.sh` or
+  `scripts/guard.sh`. They are fingerprinted; editing one stops the loop.
+  If you believe the verifier is wrong, say so in `PROGRESS.md` and stop.
+- Never regenerate `src/bpf/vmlinux.h`. Never run `apt`, `apt-get`,
+  `apt-mark`. Never attach to the root cgroup.
+- Bounds-check every read; bound every loop (`bpf_loop()` is available).
+- Keep the ringbuf record small; do not bring back the 512-byte snapshot
+  just to carry ciphers. Bump `SKB_EVENT_VERSION` on any layout change.
+- Leave nothing running or attached when you finish; the loop checks.
 
 ## Each iteration
 
-Append to `PROGRESS.md` what you tried and what happened — verifier output
-verbatim when it rejects. Then `git commit`.
+Append to `PROGRESS.md` what you tried and what happened — verifier
+rejections verbatim. Then `git commit`.

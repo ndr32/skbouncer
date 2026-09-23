@@ -422,3 +422,25 @@ required, as `docker-default` blocks signalling processes outside the
 profile.
 
 - [x] DONE M2.6
+
+
+## M3 — walk the ClientHello in the kernel
+
+Status: not started. Done when `scripts/verify-M3.sh` passes.
+
+### Baseline
+
+- Event carries cgroup_id, tuple, record_len, captured_len, trunc_reason,
+  ifindex, direction. `handshake_len` and `legacy_version` are declared, unset.
+- `skbouncer -i <veth> --direction ingress` attaches; no `--format` option.
+- Against this build the verifier stops at: unrecognized option '--format'.
+- Ground truth from the verifier's servers (OpenSSL 3.5.8):
+  tls12_two 136 B, 2 ciphers, no supported_versions;
+  tls13_one 208 B, 1 cipher, [0x0304];
+  default_small 285 B, 30 ciphers, [0x0304, 0x0303];
+  default_pqc 1519 B, 30 ciphers, [0x0304, 0x0303], spans two segments;
+  cipher_cap 304 B, 83 ciphers offered.
+
+### Iterations
+
+<!-- append below -->
