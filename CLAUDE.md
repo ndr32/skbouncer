@@ -92,6 +92,7 @@ OUT: decryption, IPv6 (connect4 is v4-only), Kubernetes / multi-host, Encrypted 
        PLUS a truncation flag from day one (this is the fragmentation dataset)
 - M4 - cgroup id -> Docker container name in userspace
 - M5 - JSON policy format + userspace policy check + audit mode  <- CURRENT
+       (format and verdict semantics: policy/README.md)
 - M6 - enforce mode
 - M7 - evaluation harness (parse accuracy, fragmentation coverage, runtime cost)
 

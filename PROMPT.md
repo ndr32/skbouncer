@@ -1,40 +1,44 @@
-# Loop task: M4 — name the container behind each event
+# Loop task: M5 — policy and audit mode
 
-Read `CLAUDE.md` for scope and safety rules; they override this file. Note
-the MEASURED 2026-09-23 entry: the cgroup id is the container identity, not
-the veth.
+Read `CLAUDE.md` for scope and safety rules; they override this file.
 Read `PROGRESS.md` — you have no memory of earlier iterations. The loop
 appends the verifier's verdict there after every iteration.
 
 ## Goal
 
-In userspace, resolve each event's `cgroup_id` to the Docker container it
-belongs to, using `src/user/container.{c,h}` (the interface already exists).
+Implement `policy/README.md`: load a JSON policy with `-p FILE` and give
+every event a verdict in audit mode. Nothing is blocked yet; that is M6.
 
-- Add `"container"` to the JSON output: the container name, or `null` when
-  the cgroup belongs to no container. Show it in the text output too.
-- Containers start after skbouncer does. A lookup miss must refresh before
-  answering `null`.
-- Resolve from the cgroup id, never from the interface: containers sharing a
-  network namespace share one veth and one source address.
+- JSON output gains `"verdict"`: `"allow"`, `"violation"` or `"unknown"`,
+  present whenever a policy is loaded. Show it in text output too.
+- A malformed policy or an unknown cipher name makes skbouncer exit non-zero
+  before loading BPF, with an error naming the file position or the bad name.
+- `src/user/policy.{c,h}` exist as stubs with jansson already wired in. Change
+  the interface if it needs the container name; nothing outside `src/` is
+  bound to it.
 
-## Done means `scripts/verify-M4.sh` passes
+The hard part is `unknown`. A truncated record is not automatically
+`unknown`: if the cipher list and versions were read in full before the cut,
+the verdict is certain. Userspace cannot currently tell a fully read list
+from one cut by the segment boundary, so the kernel will need to say so.
 
-It runs `verify-M3.sh` first, then watches container A's veth while A, and
-B (started later, inside A's network namespace), make handshakes; C sits on
-an unwatched veth. Each event must carry the right cgroup id and name. Run
-it yourself as often as you like; the loop ends when it passes.
+## Done means `scripts/verify-M5.sh` passes
+
+It runs `verify-M4.sh` first (which runs M3). Then it checks two bad policy
+files are rejected, and nine handshakes from five containers sharing one
+veth get the verdicts `policy/README.md` prescribes — including a 1833-byte
+post-quantum ClientHello that splits but must still be `allow`, and a
+64-of-83-ciphers case that must be `unknown`. Run it as often as you like;
+the loop ends when it passes.
 
 ## Rules
 
-- Never edit `scripts/verify-*.sh`, `tests/`, `scripts/loop.sh` or
-  `scripts/guard.sh`. They are fingerprinted; editing one stops the loop.
-  If you believe a verifier is wrong, say so in `PROGRESS.md` and stop.
-- skbouncer runs as root and may block the event loop only briefly: cache
-  lookups, and do not shell out to the `docker` CLI. Libraries stay libbpf,
-  libelf, zlib and jansson.
+- Never edit `scripts/verify-*.sh`, `tests/`, `policy/README.md`,
+  `scripts/loop.sh` or `scripts/guard.sh`. If you believe the verifier or
+  the spec is wrong, say so in `PROGRESS.md` and stop.
 - Never regenerate `src/bpf/vmlinux.h`. Never run `apt`, `apt-get`,
   `apt-mark`. Never attach to the root cgroup.
+- Bump `SKB_EVENT_VERSION` on any layout change.
 - Leave nothing running or attached when you finish; the loop checks.
 
 ## Each iteration

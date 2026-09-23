@@ -550,3 +550,20 @@ B (in A's netns, started after skbouncer) resolved on first sight:
 cgroup 51762 `skb-verify-m4-b` vs A's 51588 `skb-verify-m4-a`, both from
 172.17.0.3 on the same veth. Left clean: no skbouncer, no skb_tc, no test
 containers.
+
+## M5 — policy and audit mode
+
+Status: not started. Done when `scripts/verify-M5.sh` passes.
+
+### Baseline
+
+- `policy.c` is a stub: `-p` exits with "policy loading not implemented".
+- Against the M4 build, with `-p` removed, every case reaches the right
+  container over the shared veth; the PQC case is a 1833-byte record with
+  trunc=segment, 1 cipher and versions [772] fully seen; the wide case shows
+  64 ciphers with ciphers_capped. Only the verdicts are missing.
+- One verifier run takes about 40 s including the M4 and M3 regressions.
+
+### Iterations
+
+<!-- append below -->

@@ -13,7 +13,7 @@ BASELINE="${BASELINE:-.loop/baseline}"
 
 # Files an iteration must not change: the kernel pin, and everything that
 # decides whether an iteration passed.
-PROTECTED="src/bpf/vmlinux.h scripts/guard.sh scripts/loop.sh"
+PROTECTED="src/bpf/vmlinux.h scripts/guard.sh scripts/loop.sh policy/README.md"
 
 capture() {
 	echo "kernel=$(uname -r)"
