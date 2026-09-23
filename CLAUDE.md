@@ -91,9 +91,9 @@ OUT: decryption, IPv6 (connect4 is v4-only), Kubernetes / multi-host, Encrypted 
 - M3 - in-kernel ClientHello walk: cipher suites + supported_versions (ext 0x002b),
        PLUS a truncation flag from day one (this is the fragmentation dataset)
 - M4 - cgroup id -> Docker container name in userspace
-- M5 - JSON policy format + userspace policy check + audit mode  <- CURRENT
+- M5 - JSON policy format + userspace policy check + audit mode
        (format and verdict semantics: policy/README.md)
-- M6 - enforce mode
+- M6 - enforce mode  <- CURRENT
 - M7 - evaluation harness (parse accuracy, fragmentation coverage, runtime cost)
 
 Build each milestone so it loads and runs before starting the next.
