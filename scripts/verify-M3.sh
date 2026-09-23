@@ -65,13 +65,15 @@ VETH=$(ip -o link | awk -v i="$IDX" -F': ' '$1+0==i {split($2,a,"@"); print a[1]
 sudo -n ./skbouncer -i "$VETH" --direction ingress --format json \
 	>"$OUT/events.jsonl" 2>"$OUT/loader.err" &
 LOADER=$!
+# Capture before matching: `bpftool | grep -q` under pipefail can fail with
+# SIGPIPE when bpftool is still writing after grep has matched and exited.
+attached() { local out; out=$(sudo -n bpftool net show dev "$VETH" 2>/dev/null); [[ $out == *skb_tc* ]]; }
 for _ in $(seq 1 20); do
-	sudo -n bpftool net show dev "$VETH" 2>/dev/null | grep -q skb_tc && break
+	attached && break
 	kill -0 "$LOADER" 2>/dev/null || { LOADER=; die "skbouncer exited early: $(head -1 "$OUT/loader.err")"; }
 	sleep 0.5
 done
-sudo -n bpftool net show dev "$VETH" 2>/dev/null | grep -q skb_tc ||
-	die "skbouncer never attached to $VETH ingress"
+attached || die "skbouncer never attached to $VETH ingress"
 
 json='['
 while IFS='|' read -r name port tls split args; do
