@@ -600,6 +600,6 @@ The verifier passed on the first run and again on a second:
 PQC case: 1833-byte record, 1443 bytes captured, trunc=segment, both lists
 seen -> allow. Wide case: 64 ciphers, capped, ciphers_seen=false -> unknown.
 The TLS 1.2-only client sends no supported_versions, and versions_seen=true
-there shows the absence proof works. Not covered by the verifier: a cut
-landing inside or before supported_versions (should give unknown when
-min_version is set). Left clean: no skbouncer, no skb_tc, no test containers.
+there shows the absence proof works. A cut landing before supported_versions
+(should give unknown when min_version is set) was untested; verify-M5.sh
+now covers it with a long ALPN list, both unknown and violation-despite-cut. Left clean: no skbouncer, no skb_tc, no test containers.
