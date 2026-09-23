@@ -85,8 +85,8 @@ OUT: decryption, IPv6 (connect4 is v4-only), Kubernetes / multi-host, Encrypted 
 - M2 - tc egress program detects TLS ClientHello (content type 0x16, handshake type 0x01),
        emits {cgroup_id, tuple, len} to a ringbuf. NO PARSING YET.
 - M3 - in-kernel ClientHello walk: cipher suites + supported_versions (ext 0x002b),
-       PLUS a truncation flag from day one (this is the fragmentation dataset)  <- CURRENT
-- M4 - cgroup id -> Docker container name in userspace
+       PLUS a truncation flag from day one (this is the fragmentation dataset)
+- M4 - cgroup id -> Docker container name in userspace  <- CURRENT
 - M5 - JSON policy format + userspace policy check + audit mode
 - M6 - enforce mode
 - M7 - evaluation harness (parse accuracy, fragmentation coverage, runtime cost)

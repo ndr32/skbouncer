@@ -426,7 +426,8 @@ profile.
 
 ## M3 — walk the ClientHello in the kernel
 
-Status: not started. Done when `scripts/verify-M3.sh` passes.
+Status: complete. `scripts/verify-M3.sh` passed on iteration 1 and 5 of 5
+independent reruns after the probe fix.
 
 ### Baseline
 
