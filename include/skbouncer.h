@@ -9,11 +9,11 @@
 #endif
 
 /* Bump on any layout change to struct skb_event. */
-#define SKB_EVENT_VERSION 3
+#define SKB_EVENT_VERSION 4
 
 #define SKB_MAX_CIPHERS   64	/* verifier needs a bounded walk */
 #define SKB_MAX_VERSIONS  8
-#define SKB_MAX_SNAPSHOT  512
+#define SKB_MAX_EXTS      32	/* extensions walked looking for 0x002b */
 
 /* Kernel-side tallies. M7 needs a denominator: an event lost to a full
  * ringbuf must not look like a connection that never happened. */
@@ -35,8 +35,8 @@ enum skb_direction {
 enum skb_trunc_reason {
 	SKB_TRUNC_NONE = 0,
 	SKB_TRUNC_SEGMENT,	/* record continues in a later segment */
-	SKB_TRUNC_SNAPSHOT,	/* exceeded SKB_MAX_SNAPSHOT */
-	SKB_TRUNC_PARSE,	/* walk stopped early */
+	SKB_TRUNC_EXT_LIMIT,	/* walked SKB_MAX_EXTS extensions without reaching the end */
+	SKB_TRUNC_PARSE,	/* malformed: a length points past the record */
 };
 
 /* Everything here is in network byte order, as it sits on the wire. */
@@ -64,15 +64,14 @@ struct skb_event {
 	__u8  trunc_reason;
 	__u8  direction;	/* enum skb_direction */
 	__u8  event_version;
-	__u8  _pad[5];
+	__u8  n_ciphers;	/* entries filled in ciphers[] */
+	__u8  n_versions;	/* entries filled in versions[]; 0 = absent */
+	__u8  ciphers_capped;	/* offered more than SKB_MAX_CIPHERS */
+	__u8  _pad[2];
 
-	__u8  snapshot[SKB_MAX_SNAPSHOT];
+	/* Wire order, and still big-endian: userspace swaps. */
+	__u16 ciphers[SKB_MAX_CIPHERS];
+	__u16 versions[SKB_MAX_VERSIONS];
 };
-
-/* Records carry the header plus however much of `snapshot` was filled, so
- * the tail is not sent while it is empty. Userspace must accept anything at
- * least this long: M3 starts filling the snapshot and the records grow
- * without a further format change. */
-#define SKB_EVENT_HDR_LEN __builtin_offsetof(struct skb_event, snapshot)
 
 #endif /* SKBOUNCER_H */

@@ -45,7 +45,7 @@ guard_check() {
 # Stops leftover loaders, then fails if anything is still attached or the
 # environment can no longer run the tests.
 guard_clean() {
-	local phase="${1:-check}" p ok=0
+	local phase="${1:-check}" p net ok=0
 
 	for p in $(pgrep -x skbouncer); do
 		echo "guard: $phase - stopping leftover skbouncer (pid $p)" >&2
@@ -54,12 +54,13 @@ guard_clean() {
 	sleep 1
 	docker rm -f skb-verify-srv skb-verify-cli >/dev/null 2>&1
 
-	if ! sudo -n bpftool net show >/dev/null 2>&1; then
+	# Captured, not piped: `bpftool | grep -q` can SIGPIPE and read as clean.
+	if ! net=$(sudo -n bpftool net show 2>/dev/null); then
 		echo "guard: $phase - cannot run bpftool via sudo -n; check sudoers" >&2
 		ok=1
-	elif sudo -n bpftool net show 2>/dev/null | grep -q skb_tc; then
+	elif [[ $net == *skb_tc* ]]; then
 		echo "guard: $phase - skb_tc still attached:" >&2
-		sudo -n bpftool net show 2>/dev/null | grep skb_tc | sed 's/^/guard:   /' >&2
+		grep skb_tc <<<"$net" | sed 's/^/guard:   /' >&2
 		ok=1
 	fi
 	if pgrep -x skbouncer >/dev/null; then

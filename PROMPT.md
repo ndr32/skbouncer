@@ -23,7 +23,7 @@ needs these keys, with these names:
     dport record_len captured_len trunc legacy_version
     versions ciphers ciphers_capped
 
-`trunc` is a string: "none", "segment", "snapshot" or "parse". `versions`
+`trunc` is a string: "none", "segment", "ext_limit" or "parse". `versions`
 and `ciphers` are arrays of integers. Keep the existing text output as the
 default.
 

@@ -17,6 +17,9 @@
 #define TLS_RECORD_HLEN    5
 #define TLS_RECORD_MAX     16384	/* RFC 8446 5.1: 2^14 */
 #define TLS_HS_HLEN        4		/* type + uint24 length */
+#define TLS_RANDOM_LEN     32
+#define TLS_SID_MAX        32
+#define TLS_EXT_SUPPORTED_VERSIONS 0x002b
 
 /* Record header plus the first byte of the handshake body. */
 #define TLS_SNIFF_LEN (TLS_RECORD_HLEN + 1)
@@ -49,6 +52,128 @@ static __always_inline void bump(__u32 stat)
 
 	if (c)
 		__sync_fetch_and_add(c, 1);
+}
+
+static __always_inline __u16 load16(struct __sk_buff *skb, __u32 off)
+{
+	__u8 b[2] = {};
+
+	bpf_skb_load_bytes(skb, off, b, 2);
+	return ((__u16)b[0] << 8) | b[1];
+}
+
+/* Walks the ClientHello body starting at `hs`, the handshake header, and
+ * reading nothing at or past hs + ev->captured_len: bytes beyond that reach
+ * the peer in a later segment. Returns SKB_TRUNC_SEGMENT when the walk
+ * needed a byte it did not have, whichever limit caused it; the caller
+ * decides which of segment and record that was.
+ *
+ * Offsets are skb offsets; bpf_skb_load_bytes() checks them at run time, so
+ * the verifier only needs the copy lengths bounded. */
+static __always_inline __u8 walk_hello(struct __sk_buff *skb,
+				       struct skb_event *ev, __u32 hs)
+{
+	__u32 lim = hs + ev->captured_len;
+	__u32 end = hs + ev->record_len;
+	__u32 off, ext_end, n, len;
+	__u8 b[4];
+	int i;
+
+	if (hs + TLS_HS_HLEN + 2 > lim)
+		return SKB_TRUNC_SEGMENT;
+	if (bpf_skb_load_bytes(skb, hs, b, 4) < 0)
+		return SKB_TRUNC_PARSE;
+	n = ((__u32)b[1] << 16) | ((__u32)b[2] << 8) | b[3];
+	ev->handshake_len = n > 0xffff ? 0xffff : n;
+	/* A ClientHello split across records is legal but not walked. */
+	if (TLS_HS_HLEN + n < end - hs)
+		end = hs + TLS_HS_HLEN + n;
+
+	off = hs + TLS_HS_HLEN;
+	ev->legacy_version = load16(skb, off);
+	off += 2 + TLS_RANDOM_LEN;
+
+	/* session_id */
+	if (off + 1 > lim)
+		return SKB_TRUNC_SEGMENT;
+	if (bpf_skb_load_bytes(skb, off, b, 1) < 0)
+		return SKB_TRUNC_PARSE;
+	if (b[0] > TLS_SID_MAX)
+		return SKB_TRUNC_PARSE;
+	off += 1 + b[0];
+
+	/* cipher_suites: one copy of up to SKB_MAX_CIPHERS entries, cut to
+	 * what this segment holds. */
+	if (off + 2 > lim)
+		return SKB_TRUNC_SEGMENT;
+	n = load16(skb, off) / 2;
+	off += 2;
+	if (n > SKB_MAX_CIPHERS) {
+		ev->ciphers_capped = 1;
+		len = SKB_MAX_CIPHERS;
+	} else {
+		len = n;
+	}
+	if (off + len * 2 > lim)
+		len = off < lim ? (lim - off) / 2 : 0;
+	if (len > 0 && len <= SKB_MAX_CIPHERS) {
+		if (bpf_skb_load_bytes(skb, off, ev->ciphers, len * 2) < 0)
+			return SKB_TRUNC_PARSE;
+		ev->n_ciphers = len;
+	}
+	off += n * 2;
+
+	/* compression_methods */
+	if (off + 1 > lim)
+		return SKB_TRUNC_SEGMENT;
+	if (bpf_skb_load_bytes(skb, off, b, 1) < 0)
+		return SKB_TRUNC_PARSE;
+	off += 1 + b[0];
+
+	/* No extensions block at all is legal for TLS 1.2. */
+	if (off == end)
+		return SKB_TRUNC_NONE;
+	if (off + 2 > lim)
+		return SKB_TRUNC_SEGMENT;
+	ext_end = off + 2 + load16(skb, off);
+	off += 2;
+
+	for (i = 0; i < SKB_MAX_EXTS; i++) {
+		__u16 type, elen;
+
+		if (off >= ext_end)
+			return ext_end > end ? SKB_TRUNC_SEGMENT : SKB_TRUNC_NONE;
+		if (off + 4 > lim)
+			return SKB_TRUNC_SEGMENT;
+		if (bpf_skb_load_bytes(skb, off, b, 4) < 0)
+			return SKB_TRUNC_PARSE;
+		type = ((__u16)b[0] << 8) | b[1];
+		elen = ((__u16)b[2] << 8) | b[3];
+		off += 4;
+
+		if (type == TLS_EXT_SUPPORTED_VERSIONS) {
+			if (off + 1 > lim)
+				return SKB_TRUNC_SEGMENT;
+			if (bpf_skb_load_bytes(skb, off, b, 1) < 0)
+				return SKB_TRUNC_PARSE;
+			n = b[0] / 2;
+			len = n > SKB_MAX_VERSIONS ? SKB_MAX_VERSIONS : n;
+			if (off + 1 + len * 2 > lim)
+				len = off + 1 < lim ? (lim - off - 1) / 2 : 0;
+			if (len > 0 && len <= SKB_MAX_VERSIONS) {
+				if (bpf_skb_load_bytes(skb, off + 1, ev->versions,
+						       len * 2) < 0)
+					return SKB_TRUNC_PARSE;
+				ev->n_versions = len;
+			}
+			/* Nothing further is extracted; the rest of the
+			 * record only matters for its length, which the
+			 * caller already has. */
+			return len < n ? SKB_TRUNC_SEGMENT : SKB_TRUNC_NONE;
+		}
+		off += elen;
+	}
+	return SKB_TRUNC_EXT_LIMIT;
 }
 
 /* One program for both clsact hooks - the parse is direction-agnostic, and
@@ -152,16 +277,14 @@ int skb_tc(struct __sk_buff *skb)
 	body_len = avail - TLS_RECORD_HLEN;
 	captured_len = body_len < record_len ? (__u16)body_len : record_len;
 
-	/* Reserve the header only. The size must be a compile-time constant
-	 * for the verifier, and `snapshot` stays empty until M3 fills it. */
-	ev = bpf_ringbuf_reserve(&events, SKB_EVENT_HDR_LEN, 0);
+	ev = bpf_ringbuf_reserve(&events, sizeof(*ev), 0);
 	if (!ev) {
 		bump(SKB_STAT_DROPPED);
 		return TC_ACT_OK;
 	}
-	/* Reserved ringbuf memory is not zeroed and the M3 fields are not
-	 * filled yet; clear the header rather than leak stale bytes. */
-	__builtin_memset(ev, 0, SKB_EVENT_HDR_LEN);
+	/* Reserved ringbuf memory is not zeroed, and the walk may stop before
+	 * filling every field. */
+	__builtin_memset(ev, 0, sizeof(*ev));
 
 	/* Expected to be 0 on a forwarded skb, which has no local socket.
 	 * Recorded rather than relied on: the interface is the identity. */
@@ -172,9 +295,16 @@ int skb_tc(struct __sk_buff *skb)
 	ev->direction = attach_dir;
 	ev->record_len = record_len;
 	ev->captured_len = captured_len;
-	ev->trunc_reason = captured_len < record_len ? SKB_TRUNC_SEGMENT
-						     : SKB_TRUNC_NONE;
 	ev->event_version = SKB_EVENT_VERSION;
+
+	/* A walk that runs out of segment is SEGMENT whatever it was reading:
+	 * that is the fragmentation dataset. Only a walk that runs out of
+	 * record with the whole record in hand is PARSE. */
+	ev->trunc_reason = walk_hello(skb, ev, pay_off + TLS_RECORD_HLEN);
+	if (captured_len < record_len)
+		ev->trunc_reason = SKB_TRUNC_SEGMENT;
+	else if (ev->trunc_reason == SKB_TRUNC_SEGMENT)
+		ev->trunc_reason = SKB_TRUNC_PARSE;
 
 	bpf_ringbuf_submit(ev, 0);
 	return TC_ACT_OK;

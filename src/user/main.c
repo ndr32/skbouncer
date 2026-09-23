@@ -25,6 +25,7 @@ struct options {
 	enum run_mode mode;
 	enum skb_direction direction;
 	bool verbose;
+	bool json;
 };
 
 static volatile sig_atomic_t exiting;
@@ -46,12 +47,18 @@ static int catch_signal(int sig)
 
 struct run_state {
 	unsigned long events;
+	bool json;
 };
 
 static void on_event(void *ctx, const struct skb_event *ev)
 {
 	struct run_state *st = ctx;
 
+	if (st->json) {
+		st->events++;
+		skb_event_print_json(stdout, ev);
+		return;
+	}
 	if (st->events++ == 0)
 		skb_event_header(stdout);
 	skb_event_print(stdout, ev);
@@ -95,6 +102,7 @@ static void usage(FILE *out, const char *argv0)
 "  -c, --cgroup <path>   restrict to this cgroup v2 path\n"
 "  -p, --policy <file>   JSON policy file\n"
 "  -m, --mode <mode>     audit (default) or enforce\n"
+"  -f, --format <fmt>    text (default) or json, one object per line\n"
 "  -v, --verbose         pass libbpf debug output through\n"
 "  -h, --help            this text\n"
 "\n"
@@ -140,13 +148,14 @@ static int parse_args(int argc, char **argv, struct options *opt)
 		{ "cgroup",    required_argument, NULL, 'c' },
 		{ "policy",    required_argument, NULL, 'p' },
 		{ "mode",      required_argument, NULL, 'm' },
+		{ "format",    required_argument, NULL, 'f' },
 		{ "verbose",   no_argument,       NULL, 'v' },
 		{ "help",      no_argument,       NULL, 'h' },
 		{ 0, 0, 0, 0 }
 	};
 	int c;
 
-	while ((c = getopt_long(argc, argv, "i:d:c:p:m:vh", longopts, NULL)) != -1) {
+	while ((c = getopt_long(argc, argv, "i:d:c:p:m:f:vh", longopts, NULL)) != -1) {
 		switch (c) {
 		case 'i': opt->ifname = optarg; break;
 		case 'c': opt->cgroup_path = optarg; break;
@@ -162,6 +171,17 @@ static int parse_args(int argc, char **argv, struct options *opt)
 			}
 			break;
 		case 'p': opt->policy_path = optarg; break;
+		case 'f':
+			if (strcmp(optarg, "text") == 0) {
+				opt->json = false;
+			} else if (strcmp(optarg, "json") == 0) {
+				opt->json = true;
+			} else {
+				fprintf(stderr, "skbouncer: unknown format '%s'\n",
+					optarg);
+				return -1;
+			}
+			break;
 		case 'v': opt->verbose = true; break;
 		case 'h': usage(stdout, argv[0]); exit(EXIT_SUCCESS);
 		case 'm':
@@ -219,6 +239,7 @@ int main(int argc, char **argv)
 		usage(stderr, argv[0]);
 		return EXIT_FAILURE;
 	}
+	state.json = opt.json;
 
 	if (opt.mode == MODE_ENFORCE) {
 		fprintf(stderr, "skbouncer: enforce mode not implemented\n");
