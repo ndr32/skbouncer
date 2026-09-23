@@ -553,7 +553,7 @@ containers.
 
 ## M5 — policy and audit mode
 
-Status: not started. Done when `scripts/verify-M5.sh` passes.
+Status: done — `scripts/verify-M5.sh` passes.
 
 ### Baseline
 
@@ -567,3 +567,39 @@ Status: not started. Done when `scripts/verify-M5.sh` passes.
 ### Iterations
 
 <!-- append below -->
+
+#### Iteration 1 — seen flags in the kernel, policy in userspace
+
+Kernel (`SKB_EVENT_VERSION` 4 -> 5): the old `_pad[2]` becomes `seen` plus
+one pad byte, so the struct size is unchanged. `SKB_SEEN_CIPHERS` means every
+offered cipher is in `ciphers[]` (so never when capped at 64).
+`SKB_SEEN_VERSIONS` means supported_versions was read whole, or the walk
+proved it absent: either there is no extensions block, or every extension
+header was read and none was 0x002b, in which case legacy_version is the
+offer. Extension bodies past the cut do not matter, only their headers do.
+JSON gains `ciphers_seen` and `versions_seen`.
+
+`policy.c` (jansson): `version` must be 1, `default` defaults to deny, and
+unknown keys are rejected at both levels, so a misspelt key cannot loosen a
+rule. Ciphers are given as IANA names (a table of about 80) or 0x hex. Load
+errors give `file: line L, column C: ...` for bad JSON and
+`file: rules[i].ciphers[j]: unknown cipher "NAME"` for a bad name. The
+policy is loaded before BPF. `skb_policy_check()` now takes the container
+name. It returns violation on anything seen that breaks the rule (GREASE,
+0x00ff and 0x5600 are skipped), unknown if a constrained list lacks its
+seen flag, and allow otherwise. A partial versions list is still checked
+entry by entry. JSON gains `"verdict"`, and text output gains a VERDICT
+column, but only when `-p` is given.
+
+The verifier passed on the first run and again on a second:
+
+    PASS: 6 cases, 0 failures      (M3 regression)
+    PASS: 4 cases, 0 failures      (M4)
+    PASS: 11 cases, 0 failures
+
+PQC case: 1833-byte record, 1443 bytes captured, trunc=segment, both lists
+seen -> allow. Wide case: 64 ciphers, capped, ciphers_seen=false -> unknown.
+The TLS 1.2-only client sends no supported_versions, and versions_seen=true
+there shows the absence proof works. A cut landing before supported_versions
+(should give unknown when min_version is set) was untested; verify-M5.sh
+now covers it with a long ALPN list, both unknown and violation-despite-cut. Left clean: no skbouncer, no skb_tc, no test containers.

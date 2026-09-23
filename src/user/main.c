@@ -49,21 +49,24 @@ struct run_state {
 	unsigned long events;
 	bool json;
 	struct skb_container_map *containers;
+	struct skb_policy *policy;	/* NULL: no verdicts */
 };
 
 static void on_event(void *ctx, const struct skb_event *ev)
 {
 	struct run_state *st = ctx;
 	const char *name = skb_container_lookup(st->containers, ev->cgroup_id);
+	const char *verdict = st->policy ?
+		skb_verdict_str(skb_policy_check(st->policy, ev, name)) : NULL;
 
 	if (st->json) {
 		st->events++;
-		skb_event_print_json(stdout, ev, name);
+		skb_event_print_json(stdout, ev, name, verdict);
 		return;
 	}
 	if (st->events++ == 0)
-		skb_event_header(stdout);
-	skb_event_print(stdout, ev, name);
+		skb_event_header(stdout, verdict);
+	skb_event_print(stdout, ev, name, verdict);
 }
 
 /* The detected/delivered/dropped split is the coverage denominator M7
@@ -247,15 +250,15 @@ int main(int argc, char **argv)
 		fprintf(stderr, "skbouncer: enforce mode not implemented\n");
 		return EXIT_FAILURE;
 	}
+	/* Before anything is loaded: a bad policy must cost nothing. */
 	if (opt.policy_path) {
-		char errbuf[256];
-		struct skb_policy *pol = skb_policy_load(opt.policy_path,
-							 errbuf, sizeof(errbuf));
-		if (!pol) {
+		char errbuf[512];
+
+		state.policy = skb_policy_load(opt.policy_path, errbuf, sizeof(errbuf));
+		if (!state.policy) {
 			fprintf(stderr, "skbouncer: %s\n", errbuf);
 			return EXIT_FAILURE;
 		}
-		skb_policy_free(pol);
 	}
 
 	lopts = (struct skb_loader_opts){
@@ -271,6 +274,7 @@ int main(int argc, char **argv)
 	state.containers = skb_container_map_new();
 	if (!state.containers) {
 		perror("skbouncer: container map");
+		skb_policy_free(state.policy);
 		return EXIT_FAILURE;
 	}
 	if (skb_container_refresh(state.containers) != 0)
@@ -280,6 +284,7 @@ int main(int argc, char **argv)
 	ldr = skb_loader_open(&lopts);
 	if (!ldr) {
 		skb_container_map_free(state.containers);
+		skb_policy_free(state.policy);
 		return EXIT_FAILURE;
 	}
 
@@ -296,6 +301,7 @@ int main(int argc, char **argv)
 		perror("skbouncer: sigaction");
 		skb_loader_close(ldr);
 		skb_container_map_free(state.containers);
+		skb_policy_free(state.policy);
 		return EXIT_FAILURE;
 	}
 
@@ -321,5 +327,6 @@ int main(int argc, char **argv)
 
 	skb_loader_close(ldr);
 	skb_container_map_free(state.containers);
+	skb_policy_free(state.policy);
 	return EXIT_SUCCESS;
 }

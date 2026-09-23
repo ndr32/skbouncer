@@ -31,6 +31,10 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# A long ALPN list: OpenSSL writes ALPN before supported_versions, so this
+# pushes supported_versions past the first segment boundary.
+ALPN=$(python3 -c "print(','.join(f'proto-{i:04d}' for i in range(160)))")
+
 # port|container|s_client args|verdict|why|trunc
 CASES="4451|strict|-tls1_3 -ciphersuites TLS_AES_128_GCM_SHA256 -groups X25519|allow|TLS 1.3 only, permitted cipher|
 4452|strict|-groups X25519|violation|also offers TLS 1.2, below min 1.3|
@@ -40,7 +44,9 @@ CASES="4451|strict|-tls1_3 -ciphersuites TLS_AES_128_GCM_SHA256 -groups X25519|a
 4456|legacy|-tls1_2 -cipher ECDHE-RSA-AES256-GCM-SHA384|violation|offers 0xc030, not permitted|
 4457|wide|-tls1_2 -cipher ALL:@SECLEVEL=0|unknown|83 offered, 64 seen and permitted, 19 unseen|
 4458|other|-groups X25519|allow|matches glob rule with no cipher list|
-4459|stranger|-groups X25519|violation|no rule matches, default deny|"
+4459|stranger|-groups X25519|violation|no rule matches, default deny|
+4460|strict|-tls1_3 -ciphersuites TLS_AES_128_GCM_SHA256 -groups X25519 -alpn $ALPN|unknown|cut lands before supported_versions; cipher seen and permitted|segment
+4461|strict|-tls1_3 -ciphersuites TLS_CHACHA20_POLY1305_SHA256 -groups X25519 -alpn $ALPN|violation|cut before supported_versions, but a forbidden cipher was seen|segment"
 
 echo "verify: M4 regression (includes M3)"
 scripts/verify-M4.sh | tail -2

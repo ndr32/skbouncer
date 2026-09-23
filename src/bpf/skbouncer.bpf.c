@@ -121,6 +121,8 @@ static __always_inline __u8 walk_hello(struct __sk_buff *skb,
 			return SKB_TRUNC_PARSE;
 		ev->n_ciphers = len;
 	}
+	if (len == n)
+		ev->seen |= SKB_SEEN_CIPHERS;
 	off += n * 2;
 
 	/* compression_methods */
@@ -131,8 +133,10 @@ static __always_inline __u8 walk_hello(struct __sk_buff *skb,
 	off += 1 + b[0];
 
 	/* No extensions block at all is legal for TLS 1.2. */
-	if (off == end)
+	if (off == end) {
+		ev->seen |= SKB_SEEN_VERSIONS;
 		return SKB_TRUNC_NONE;
+	}
 	if (off + 2 > lim)
 		return SKB_TRUNC_SEGMENT;
 	ext_end = off + 2 + load16(skb, off);
@@ -141,8 +145,14 @@ static __always_inline __u8 walk_hello(struct __sk_buff *skb,
 	for (i = 0; i < SKB_MAX_EXTS; i++) {
 		__u16 type, elen;
 
-		if (off >= ext_end)
-			return ext_end > end ? SKB_TRUNC_SEGMENT : SKB_TRUNC_NONE;
+		if (off >= ext_end) {
+			if (ext_end > end)
+				return SKB_TRUNC_SEGMENT;
+			/* Every extension walked, none was 0x002b:
+			 * legacy_version is the offer. */
+			ev->seen |= SKB_SEEN_VERSIONS;
+			return SKB_TRUNC_NONE;
+		}
 		if (off + 4 > lim)
 			return SKB_TRUNC_SEGMENT;
 		if (bpf_skb_load_bytes(skb, off, b, 4) < 0)
@@ -169,7 +179,10 @@ static __always_inline __u8 walk_hello(struct __sk_buff *skb,
 			/* Nothing further is extracted; the rest of the
 			 * record only matters for its length, which the
 			 * caller already has. */
-			return len < n ? SKB_TRUNC_SEGMENT : SKB_TRUNC_NONE;
+			if (len < n)
+				return SKB_TRUNC_SEGMENT;
+			ev->seen |= SKB_SEEN_VERSIONS;
+			return SKB_TRUNC_NONE;
 		}
 		off += elen;
 	}

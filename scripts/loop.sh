@@ -56,6 +56,9 @@ main() {
 		git switch -q -c "$BRANCH"
 	fi || return 1
 	mkdir -p "$LOGDIR"
+	# Lets `scripts/guard.sh check` refuse to clean up under a running loop.
+	echo $$ >.loop/loop.pid
+	trap 'rm -f .loop/loop.pid' EXIT
 	echo "loop: $MILESTONE on $BRANCH, model $MODEL, oracle ${VERIFY}$([[ -x $VERIFY ]] || echo ' (missing: using DONE line)')"
 
 	guard_check startup && guard_clean startup || return 1
@@ -75,6 +78,7 @@ main() {
 		guard_clean "after iteration $i" ||
 			{ echo "loop: stopping; environment is not clean" >&2; return 1; }
 
+		echo "loop: iteration $i finished; running ${VERIFY}, not done yet"
 		if exit_check "$i"; then
 			echo "loop: $MILESTONE passed at iteration $i. Review: git diff main...$BRANCH"
 			return 0
