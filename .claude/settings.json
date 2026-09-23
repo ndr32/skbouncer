@@ -1,4 +1,5 @@
 {
+  "model": "claude-opus-5-5",
   "permissions": {
     "allow": [
       "Bash(make:*)",
@@ -8,8 +9,7 @@
       "Bash(docker:*)",
       "Bash(git:*)",
       "Read(*)",
-      "Edit(src/**)",
-      "Write(src/**)"
+      "Edit(src/**)"
     ],
     "deny": [
       "Bash(apt:*)",

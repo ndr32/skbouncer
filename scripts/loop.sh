@@ -13,6 +13,7 @@ source scripts/guard.sh
 
 MAX_ITER="${MAX_ITER:-15}"
 MILESTONE="${MILESTONE:-M2.6}"
+MODEL="${MODEL:-claude-opus-5-5}"
 PROMPT_FILE="${PROMPT_FILE:-PROMPT.md}"
 CLAUDE="${CLAUDE:-claude}"
 
@@ -30,7 +31,9 @@ guard_check "startup" || exit 1
 for i in $(seq 1 "$MAX_ITER"); do
 	echo "=============== iteration $i/$MAX_ITER ==============="
 
-	"$CLAUDE" -p "$(cat "$PROMPT_FILE")" --dangerously-skip-permissions
+	"$CLAUDE" -p "$(cat "$PROMPT_FILE")" \
+		--model "$MODEL" \
+		--dangerously-skip-permissions
 
 	if ! guard_check "after iteration $i"; then
 		echo "loop: stopping. Revert the change above before continuing." >&2
