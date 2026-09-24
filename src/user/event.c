@@ -63,6 +63,53 @@ void skb_event_header(FILE *out, bool verdict, bool action)
 		verdict ? " REASON" : "");
 }
 
+/* "1.3,1.2", GREASE skipped; the legacy version if the walk proved there
+ * was no supported_versions, "?" if it could not tell. */
+static void format_versions(const struct skb_event *ev, char *buf, size_t len)
+{
+	char vb[8];
+	size_t n = 0;
+
+	buf[0] = '\0';
+	for (unsigned i = 0; i < ev->n_versions && i < SKB_MAX_VERSIONS; i++) {
+		uint16_t v = ntohs(ev->versions[i]);
+
+		if (!skb_is_grease(v) && n < len)
+			n += snprintf(buf + n, len - n, "%s%s", n ? "," : "",
+				      skb_version_name(v, vb));
+	}
+	if (!n)
+		snprintf(buf, len, "%s", ev->seen & SKB_SEEN_VERSIONS ?
+			 skb_version_name(ev->legacy_version, vb) : "?");
+}
+
+/* The first real offer by name, then a count: a full list would not fit on
+ * a line. A trailing + means the list was capped. */
+static void format_ciphers(const struct skb_event *ev, char *buf, size_t len)
+{
+	unsigned shown = 0;
+	size_t n;
+
+	buf[0] = '\0';
+	for (unsigned i = 0; i < ev->n_ciphers && i < SKB_MAX_CIPHERS; i++) {
+		uint16_t c = ntohs(ev->ciphers[i]);
+		const char *name;
+
+		if (skb_cipher_ignored(c) || shown++)
+			continue;
+		if ((name = skb_cipher_name(c)))
+			snprintf(buf, len, "%s", name);
+		else
+			snprintf(buf, len, "0x%04x", c);
+	}
+	if (!shown)
+		snprintf(buf, len, "-");
+	n = strlen(buf);
+	if (shown > 1 || ev->ciphers_capped)
+		snprintf(buf + n, len - n, " +%u%s", shown ? shown - 1 : 0,
+			 ev->ciphers_capped ? "+" : "");
+}
+
 /* The cgroup id, not the veth, identifies the container: containers sharing
  * a network namespace share one veth. It is 0 for anything forwarded,
  * which is every bridged container at a physical interface. */
@@ -71,11 +118,9 @@ void skb_event_print(FILE *out, const struct skb_event *ev, const char *containe
 {
 	char src[INET_ADDRSTRLEN], dst[INET_ADDRSTRLEN];
 	char sbuf[INET_ADDRSTRLEN + 8], dbuf[INET_ADDRSTRLEN + 8];
-	char who[32], tls[32] = "", bytes[24], ciphers[80] = "", vb[8];
+	char who[32], tls[32], bytes[24], ciphers[80];
 	struct timespec ts = wall_time(ev->ktime_ns);
-	unsigned shown = 0, rest = 0;
 	struct tm tm;
-	size_t n = 0;
 
 	localtime_r(&ts.tv_sec, &tm);
 	if (container)
@@ -86,45 +131,12 @@ void skb_event_print(FILE *out, const struct skb_event *ev, const char *containe
 		 ntohs(ev->tuple.sport));
 	snprintf(dbuf, sizeof(dbuf), "%s:%u", ip4(dst, ev->tuple.daddr),
 		 ntohs(ev->tuple.dport));
-
-	for (unsigned i = 0; i < ev->n_versions && i < SKB_MAX_VERSIONS; i++) {
-		uint16_t v = ntohs(ev->versions[i]);
-
-		if (!skb_is_grease(v) && n < sizeof(tls))
-			n += snprintf(tls + n, sizeof(tls) - n, "%s%s", n ? "," : "",
-				      skb_version_name(v, vb));
-	}
-	if (!n)
-		snprintf(tls, sizeof(tls), "%s", ev->seen & SKB_SEEN_VERSIONS ?
-			 skb_version_name(ev->legacy_version, vb) : "?");
-
+	format_versions(ev, tls, sizeof(tls));
+	format_ciphers(ev, ciphers, sizeof(ciphers));
 	if (ev->captured_len < ev->record_len)
 		snprintf(bytes, sizeof(bytes), "%u/%u", ev->captured_len, ev->record_len);
 	else
 		snprintf(bytes, sizeof(bytes), "%u", ev->record_len);
-
-	/* The first real offer by name, then a count: a full list would not
-	 * fit on a line. */
-	for (unsigned i = 0; i < ev->n_ciphers && i < SKB_MAX_CIPHERS; i++) {
-		uint16_t c = ntohs(ev->ciphers[i]);
-		const char *name;
-
-		if (skb_cipher_ignored(c))
-			continue;
-		if (shown++) {
-			rest++;
-			continue;
-		}
-		if ((name = skb_cipher_name(c)))
-			snprintf(ciphers, sizeof(ciphers), "%s", name);
-		else
-			snprintf(ciphers, sizeof(ciphers), "0x%04x", c);
-	}
-	if (!shown)
-		snprintf(ciphers, sizeof(ciphers), "-");
-	if (rest || ev->ciphers_capped)
-		snprintf(ciphers + strlen(ciphers), sizeof(ciphers) - strlen(ciphers),
-			 " +%u%s", rest, ev->ciphers_capped ? "+" : "");
 
 	fprintf(out, "%02d:%02d:%02d ", tm.tm_hour, tm.tm_min, tm.tm_sec);
 	if (ev->action)
