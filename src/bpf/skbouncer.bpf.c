@@ -228,11 +228,6 @@ static __always_inline __u8 walk_hello(struct __sk_buff *skb,
 	return SKB_TRUNC_EXT_LIMIT;
 }
 
-static __always_inline int is_grease(__u16 v)
-{
-	return (v & 0x0f0f) == 0x0a0a && (v >> 8) == (v & 0xff);
-}
-
 /* skb_policy_explain() in userspace, which it must agree with. */
 static __always_inline __u8 check_policy(const struct skb_event *ev)
 {
@@ -251,7 +246,7 @@ static __always_inline __u8 check_policy(const struct skb_event *ev)
 		for (i = 0; i < SKB_MAX_CIPHERS && i < ev->n_ciphers; i++) {
 			__u16 c = bpf_ntohs(ev->ciphers[i]);
 
-			if (is_grease(c) || c == 0x00ff || c == 0x5600)
+			if (skb_cipher_ignored(c))
 				continue;
 			if (!((r->ciphers[c >> 6] >> (c & 63)) & 1))
 				return SKB_VERDICT_VIOLATION;
@@ -265,7 +260,7 @@ static __always_inline __u8 check_policy(const struct skb_event *ev)
 			for (i = 0; i < SKB_MAX_VERSIONS && i < ev->n_versions; i++) {
 				__u16 v = bpf_ntohs(ev->versions[i]);
 
-				if (!is_grease(v) && v < r->min_version)
+				if (!skb_is_grease(v) && v < r->min_version)
 					return SKB_VERDICT_VIOLATION;
 			}
 		} else if (ev->seen & SKB_SEEN_VERSIONS) {

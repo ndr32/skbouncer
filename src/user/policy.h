@@ -20,8 +20,6 @@ enum skb_verdict skb_policy_explain(const struct skb_policy *pol,
 
 /* IANA name, or NULL if not in the table. */
 const char *skb_cipher_name(uint16_t id);
-/* GREASE and the two SCSVs: not real offers. */
-bool skb_cipher_ignored(uint16_t id);
 /* "1.0".."1.3", else "0x...." */
 const char *skb_version_name(uint16_t v, char buf[8]);
 

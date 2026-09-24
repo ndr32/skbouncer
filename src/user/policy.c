@@ -108,20 +108,9 @@ static const struct { const char *name; uint16_t id; } cipher_names[] = {
 	{ "TLS_DH_anon_WITH_AES_256_CBC_SHA",              0x003a },
 	{ "TLS_ECDH_anon_WITH_AES_128_CBC_SHA",            0xc018 },
 	{ "TLS_ECDH_anon_WITH_AES_256_CBC_SHA",            0xc019 },
-	{ "TLS_EMPTY_RENEGOTIATION_INFO_SCSV",             0x00ff },
-	{ "TLS_FALLBACK_SCSV",                             0x5600 },
+	{ "TLS_EMPTY_RENEGOTIATION_INFO_SCSV",             SKB_SCSV_RENEGOTIATION },
+	{ "TLS_FALLBACK_SCSV",                             SKB_SCSV_FALLBACK },
 };
-
-/* RFC 8701: 0x0a0a, 0x1a1a, ... 0xfafa, for ciphers and versions alike. */
-static bool is_grease(uint16_t v)
-{
-	return (v & 0x0f0f) == 0x0a0a && (v >> 8) == (v & 0xff);
-}
-
-static bool cipher_ignored(uint16_t c)
-{
-	return is_grease(c) || c == 0x00ff || c == 0x5600;
-}
 
 #ifdef HAVE_JANSSON
 
@@ -345,11 +334,6 @@ const char *skb_cipher_name(uint16_t id)
 	return NULL;
 }
 
-bool skb_cipher_ignored(uint16_t id)
-{
-	return cipher_ignored(id);
-}
-
 const char *skb_version_name(uint16_t v, char buf[8])
 {
 	if (v >= 0x0301 && v <= 0x0304)
@@ -388,7 +372,7 @@ enum skb_verdict skb_policy_explain(const struct skb_policy *pol,
 		for (unsigned i = 0; i < ev->n_ciphers && i < SKB_MAX_CIPHERS; i++) {
 			uint16_t c = ntohs(ev->ciphers[i]);
 
-			if (!cipher_ignored(c) && !cipher_permitted(r, c) && !n_bad++)
+			if (!skb_cipher_ignored(c) && !cipher_permitted(r, c) && !n_bad++)
 				bad = c;
 		}
 		part_c = !(ev->seen & SKB_SEEN_CIPHERS);
@@ -401,7 +385,7 @@ enum skb_verdict skb_policy_explain(const struct skb_policy *pol,
 			for (unsigned i = 0; i < ev->n_versions && i < SKB_MAX_VERSIONS; i++) {
 				uint16_t v = ntohs(ev->versions[i]);
 
-				if (!is_grease(v) && v < r->min_version && (!low || v < low))
+				if (!skb_is_grease(v) && v < r->min_version && (!low || v < low))
 					low = v;
 			}
 		} else if ((ev->seen & SKB_SEEN_VERSIONS) &&

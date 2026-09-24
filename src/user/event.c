@@ -90,7 +90,7 @@ void skb_event_print(FILE *out, const struct skb_event *ev, const char *containe
 	for (unsigned i = 0; i < ev->n_versions && i < SKB_MAX_VERSIONS; i++) {
 		uint16_t v = ntohs(ev->versions[i]);
 
-		if ((v & 0x0f0f) != 0x0a0a && n < sizeof(tls))
+		if (!skb_is_grease(v) && n < sizeof(tls))
 			n += snprintf(tls + n, sizeof(tls) - n, "%s%s", n ? "," : "",
 				      skb_version_name(v, vb));
 	}

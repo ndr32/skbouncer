@@ -17,6 +17,22 @@
 #define SKB_MAX_RULES     64	/* policy rules; map slot 0 is "no rule matched" */
 #define SKB_MAX_CGROUPS   4096	/* cgroup id -> rule index entries */
 
+/* Values a ClientHello carries that are not real offers, skipped by both
+ * policy checks alike: GREASE (RFC 8701: 0x0a0a, 0x1a1a ... 0xfafa) in the
+ * cipher and version lists, and the two signalling cipher suites. */
+#define SKB_SCSV_RENEGOTIATION 0x00ff
+#define SKB_SCSV_FALLBACK      0x5600
+
+static inline int skb_is_grease(__u16 v)
+{
+	return (v & 0x0f0f) == 0x0a0a && (v >> 8) == (v & 0xff);
+}
+
+static inline int skb_cipher_ignored(__u16 c)
+{
+	return skb_is_grease(c) || c == SKB_SCSV_RENEGOTIATION || c == SKB_SCSV_FALLBACK;
+}
+
 /* Kernel-side tallies. M7 needs a denominator: an event lost to a full
  * ringbuf must not look like a connection that never happened. */
 enum skb_stat {
