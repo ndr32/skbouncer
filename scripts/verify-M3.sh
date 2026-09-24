@@ -5,8 +5,9 @@
 #
 # Contract for skbouncer: `--format json` prints one JSON object per event on
 # stdout with at least dport, record_len, captured_len, trunc ("none" |
-# "segment" | "ext_limit" | "parse"), legacy_version, versions, ciphers and
-# ciphers_capped. Non-JSON lines are ignored.
+# "segment" | "ext_limit" | "parse"), legacy_version, versions, ciphers,
+# ciphers_capped, and (since M5) ciphers_seen and versions_seen. Non-JSON
+# lines are ignored.
 #
 # Client and server share docker0, so no internet or gateway is needed.
 set -uo pipefail
@@ -29,13 +30,18 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# A long ALPN list: OpenSSL writes ALPN before supported_versions, so this
+# pushes supported_versions past the first segment boundary.
+ALPN=$(python3 -c "print(','.join(f'proto-{i:04d}' for i in range(160)))")
+
 # name|port|tls|expect_split|s_client args
-CASES='tls12_two|4431|1|0|-tls1_2 -cipher ECDHE-RSA-AES128-GCM-SHA256:ECDHE-RSA-AES256-GCM-SHA384
+CASES="tls12_two|4431|1|0|-tls1_2 -cipher ECDHE-RSA-AES128-GCM-SHA256:ECDHE-RSA-AES256-GCM-SHA384
 tls13_one|4432|1|0|-tls1_3 -ciphersuites TLS_AES_128_GCM_SHA256 -groups X25519
 default_small|4433|1|0|-groups X25519
 default_pqc|4434|1|1|
 cipher_cap|4435|1|0|-tls1_2 -cipher ALL:@SECLEVEL=0
-plaintext|4436|0|0|'
+plaintext|4436|0|0|
+versions_cut|4437|1|1|-tls1_3 -ciphersuites TLS_AES_128_GCM_SHA256 -groups X25519 -alpn $ALPN"
 
 rm -rf "$OUT"
 mkdir -p "$OUT/srv"

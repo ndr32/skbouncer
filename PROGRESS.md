@@ -739,3 +739,34 @@ Verifier on the second run:
     PASS: 0 failures
 
 Left clean: no skbouncer, no skb_tc attachments, no test containers.
+
+## M6.6 — hardening from the codebase review
+
+Status: not started. Done when `scripts/verify-M6.6.sh` passes.
+
+### Baseline
+
+Whole-codebase review at 78a01b8: ten findings. Kernel check_policy() and
+userspace skb_policy_explain() agree on every path traced. Confirmed here:
+
+- A skbouncer killed by SIGPIPE (`| head -1`) left skb_tc on the veth, still
+  blocking a violating handshake with no process running.
+- Against this build, verify-M6.6.sh's own checks fail 12 ways: orphaned and
+  still-blocking filters after SIGPIPE, SIGHUP and SIGUSR2; the audit
+  instance blinded and detached by the enforce instance; mid-connection junk
+  judged a ClientHello and blocked (6 of 75 bytes delivered); cgroup_rule
+  holding 5 entries with 1 cgroup in scope. The STARTTLS case already
+  passes and must keep passing.
+- The stronger verify-M6.sh passes on blocking with the new runs 3-5 (no
+  cipher list, default allow, default deny) and fails only because
+  kernel_verdict is not emitted. The stronger verify-M3.sh already passes.
+- Found while strengthening M6: a blocked ClientHello retransmitted into a
+  later run with a permissive policy completes its handshake (the limit
+  in policy/README.md). The M6 checker now matches events per run.
+
+Documented rather than fixed: silent drop leaves connections retransmitting;
+first segments under 6 bytes are not detected.
+
+### Iterations
+
+<!-- append below -->

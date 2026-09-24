@@ -55,3 +55,13 @@ Scope, for safety:
 - `--cgroup PATH` is required and names the cgroup whose processes, and
   descendants, are enforced. The root cgroup is refused. Events from other
   cgroups on the same veth get a verdict but are never blocked.
+
+## Limits
+
+- A block drops the ClientHello, not the connection. TCP keeps
+  retransmitting it until it gives up (about 15 minutes). Each retransmit is
+  judged by whatever policy is loaded when it arrives, and passes if no
+  skbouncer is running.
+- A ClientHello is recognised from its first TCP segment. One whose first
+  segment carries under 6 bytes (a client writing the record header on its
+  own) is not detected. No client measured in `eval/census` does this.

@@ -43,6 +43,7 @@ def parse_clienthello(b):
     n = int.from_bytes(b[p:p + 2], "big"); p += 2
     ciphers = [int.from_bytes(b[p + i:p + i + 2], "big") for i in range(0, n, 2)]
     p += n
+    ciphers_end = p
     p += 1 + b[p]                             # compression_methods
     versions, versions_end = [], None
     if p < len(b):
@@ -57,7 +58,8 @@ def parse_clienthello(b):
                 versions_end = p + 4 + elen
             p += 4 + elen
     return {"legacy_version": legacy_version, "ciphers": ciphers,
-            "versions": versions, "versions_end": versions_end}
+            "versions": versions, "versions_end": versions_end,
+            "ciphers_end": ciphers_end}
 
 
 def check(events, cases, logdir):
@@ -98,6 +100,24 @@ def check(events, cases, logdir):
         capped = len(want["ciphers"]) > MAX_CIPHERS
         expect("ciphers", want["ciphers"][:MAX_CIPHERS])
         expect("ciphers_capped", capped)
+
+        # The "seen in full" flags decide unknown versus allow, so judge them
+        # from where each field ends in the real ClientHello. Fields ending in
+        # the band between SEG_MIN and SEG_MAX are not judged.
+        def seen(field, end_offset):
+            end = TLS_RECORD_HLEN + end_offset
+            if end <= SEG_MIN:
+                expect(field, True)
+            elif end > SEG_MAX:
+                expect(field, False)
+        if capped:
+            expect("ciphers_seen", False)
+        else:
+            seen("ciphers_seen", want["ciphers_end"])
+        if want["versions_end"] is not None:
+            seen("versions_seen", want["versions_end"])
+        elif TLS_RECORD_HLEN + record_len <= SEG_MIN:
+            expect("versions_seen", True)   # whole record seen: absence proven
 
         # Truncation, judged from record size alone.
         on_wire = TLS_RECORD_HLEN + record_len

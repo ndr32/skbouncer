@@ -15,9 +15,11 @@ from pathlib import Path
 
 def check(events, cases):
     fails = []
+    # Keyed by run as well as port: a blocked ClientHello is retransmitted
+    # into later runs, where a different policy may decide it.
     by_port = {}
     for ev in events:
-        by_port.setdefault(ev.get("dport"), []).append(ev)
+        by_port.setdefault((ev.get("_run"), ev.get("dport")), []).append(ev)
 
     for case in cases:
         name = case["name"]
@@ -31,7 +33,7 @@ def check(events, cases):
             continue
 
         blocked = case["expect"] == "blocked"
-        got = by_port.get(case["port"], [])
+        got = by_port.get((case.get("run"), case["port"]), [])
         why = f"({case['why']})"
 
         if blocked and case["established"]:
@@ -51,6 +53,12 @@ def check(events, cases):
         actions = {ev.get("action") for ev in got}
         if actions != {want_action}:
             fails.append(f"{name}: action = {sorted(map(str, actions))}, expected {want_action!r}")
+        for ev in got:
+            if ev.get("kernel_verdict") != ev.get("verdict"):
+                fails.append(f"{name}: kernel_verdict = {ev.get('kernel_verdict')!r} but "
+                             f"userspace verdict = {ev.get('verdict')!r}; the kernel's copy of "
+                             f"the policy has drifted")
+                break
         verdicts = {ev.get("verdict") for ev in got}
         if verdicts != {case["verdict"]}:
             fails.append(f"{name}: verdict = {sorted(map(str, verdicts))}, expected {case['verdict']!r}")

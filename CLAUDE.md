@@ -74,7 +74,8 @@ for sidecars, not a bug.
 **SAFETY: never attach enforcement to the root cgroup.** It will block this VM's own SSH and
 lock the author out. Scope to a specific container cgroup path
 (/sys/fs/cgroup/system.slice/docker-<id>.scope) and make that a REQUIRED CLI arg with no
-default. Take a VMware snapshot before every enforce-mode experiment.
+default. `--container NAME` counts as naming it: it resolves to that container's own
+scope, the narrowest possible (decided 2026-09-24, M6.5 review). Take a VMware snapshot before every enforce-mode experiment.
 Enforce mode also refuses any interface that is not a veth (policy/README.md), so the
 host's own traffic is never in the path.
 
