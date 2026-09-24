@@ -1,0 +1,143 @@
+<<< TLS 1.0, RecordHeader [length 0005]
+    16 03 01 00 d2
+<<< TLS 1.3, Handshake [length 00d2], ClientHello
+    01 00 00 ce 03 03 c9 fa 42 e3 13 28 e9 42 fa da
+    21 85 4c c4 ab 72 45 5c b1 72 03 61 f8 9f 12 49
+    73 b8 e5 27 e1 27 00 00 36 c0 2c c0 30 00 9f cc
+    a9 cc a8 cc aa c0 2b c0 2f 00 9e c0 24 c0 28 00
+    6b c0 23 c0 27 00 67 c0 0a c0 14 00 39 c0 09 c0
+    13 00 33 00 9d 00 9c 00 3d 00 3c 00 35 00 2f 01
+    00 00 6f ff 01 00 01 00 00 00 00 14 00 12 00 00
+    0f 61 70 69 2e 65 78 61 6d 70 6c 65 2e 63 6f 6d
+    00 0b 00 04 03 00 01 02 00 0a 00 0c 00 0a 00 1d
+    00 17 00 1e 00 18 00 19 00 23 00 00 00 16 00 00
+    00 17 00 00 00 0d 00 2a 00 28 04 03 05 03 06 03
+    08 07 08 08 08 09 08 0a 08 0b 08 04 08 05 08 06
+    04 01 05 01 06 01 03 03 03 01 03 02 04 02 05 02
+    06 02
+>>> TLS 1.2, RecordHeader [length 0005]
+    16 03 03 00 41
+>>> TLS 1.2, Handshake [length 0041], ServerHello
+    02 00 00 3d 03 03 13 d9 49 2d 36 85 98 e3 cd e2
+    1c 70 45 0e 38 be 7e 6b b8 50 1d 25 e1 71 44 4f
+    57 4e 47 52 44 01 00 c0 30 00 00 15 ff 01 00 01
+    00 00 0b 00 04 03 00 01 02 00 23 00 00 00 17 00
+    00
+>>> TLS 1.2, RecordHeader [length 0005]
+    16 03 03 03 15
+>>> TLS 1.2, Handshake [length 0315], Certificate
+    0b 00 03 11 00 03 0e 00 03 0b 30 82 03 07 30 82
+    01 ef a0 03 02 01 02 02 14 41 64 ef ce f3 f2 52
+    4f 60 a6 67 f5 7d 24 ed 4e 75 96 48 b3 30 0d 06
+    09 2a 86 48 86 f7 0d 01 01 0b 05 00 30 13 31 11
+    30 0f 06 03 55 04 03 0c 08 73 6b 62 2d 74 65 73
+    74 30 1e 17 0d 32 36 30 39 32 33 30 38 35 38 33
+    37 5a 17 0d 33 36 30 39 32 30 30 38 35 38 33 37
+    5a 30 13 31 11 30 0f 06 03 55 04 03 0c 08 73 6b
+    62 2d 74 65 73 74 30 82 01 22 30 0d 06 09 2a 86
+    48 86 f7 0d 01 01 01 05 00 03 82 01 0f 00 30 82
+    01 0a 02 82 01 01 00 9f f4 c4 76 76 b8 d6 02 2a
+    8d f1 dd b9 1c 8d 0b f8 3c 6c b5 60 7d 56 7e 2c
+    22 62 bb 60 bc e0 83 84 4d 74 da 0b 32 e1 69 c5
+    e8 66 87 8f 5b 49 2c 10 79 95 96 6b be 56 51 d2
+    73 14 44 8c c5 ef 2f f1 ff c3 fb 31 58 e4 33 25
+    1a d9 a1 24 86 81 6c ee 3e 0a 9b 3a 60 0b 22 40
+    39 ed dd ec 6d 1d ef 82 db 79 4c 21 d6 cf 24 9e
+    ef a9 d9 54 59 91 66 c8 b6 e8 41 2d c0 39 8b a0
+    e5 b1 6e e4 00 40 69 7a 43 65 9b e8 db 59 f5 70
+    68 a8 ca 5d dc 3d 04 18 bd 7e c3 a9 a5 5e af d4
+    f1 51 cb 9e b4 44 a3 17 88 61 77 b0 ed 16 3a b6
+    a9 1d 74 40 b5 e3 52 30 8a 47 5c 70 75 1f f7 a4
+    00 75 43 75 f4 fe 68 32 c7 a1 f9 5e 4c 77 14 38
+    d3 37 cd 90 ad 2e 4c 3e 09 f8 c6 02 aa 92 12 8f
+    9a b6 82 d7 b8 d8 a6 c4 ea 20 7d 78 f3 ad b0 35
+    d7 81 5e 37 d8 02 7f 52 eb 04 ef 0a 9f 87 49 32
+    6a d4 82 9a 55 16 21 02 03 01 00 01 a3 53 30 51
+    30 1d 06 03 55 1d 0e 04 16 04 14 c9 3b 87 a9 fe
+    52 6e 6a 71 f3 b0 b2 c6 67 e6 7e c4 a1 e5 44 30
+    1f 06 03 55 1d 23 04 18 30 16 80 14 c9 3b 87 a9
+    fe 52 6e 6a 71 f3 b0 b2 c6 67 e6 7e c4 a1 e5 44
+    30 0f 06 03 55 1d 13 01 01 ff 04 05 30 03 01 01
+    ff 30 0d 06 09 2a 86 48 86 f7 0d 01 01 0b 05 00
+    03 82 01 01 00 35 39 de 30 23 92 b3 87 ff 69 3a
+    fe f3 5c 0b c4 a1 ae 8b d0 3b 3b 9b 0a b8 f7 7a
+    62 56 c6 ee a7 f0 c6 ec d9 ae e7 13 19 33 9c 89
+    28 fb 0b 19 7f 87 12 e0 52 83 f8 b4 26 47 74 3a
+    31 a2 a9 f2 27 74 3f b8 42 a4 98 c0 c7 a1 d8 89
+    b0 59 60 34 f5 82 cc d4 c0 9b fb a6 83 f4 34 7b
+    3c 3d 0a bf 12 2e e4 a9 be 39 4b e3 f0 f3 69 36
+    5f 7b af c1 da 94 13 1b 0a 58 96 99 1d 0d 03 51
+    e5 48 50 7e 1e 14 0a 73 69 e0 c4 db e1 4e 3e 4c
+    2f a4 7e b5 75 70 15 69 44 7a a6 c1 9f f1 24 57
+    cd ef f8 d0 bb 94 75 52 f8 b7 51 66 97 d3 21 90
+    0d eb f1 87 ef f5 44 fd 99 23 af d1 0c 72 5d e1
+    42 81 54 6f 51 f3 df 8f 79 88 ba eb c3 ca c7 a6
+    fc 7c c5 85 7b d1 80 df fe 4f 31 ea 48 8d 8f 94
+    0a 9f 10 32 69 9f 12 55 c4 70 fe de 5f 22 5a 68
+    53 19 be c6 c3 98 cc 28 28 ed 9a 93 1a 32 c0 e5
+    40 44 e0 83 30
+>>> TLS 1.2, RecordHeader [length 0005]
+    16 03 03 01 2c
+>>> TLS 1.2, Handshake [length 012c], ServerKeyExchange
+    0c 00 01 28 03 00 1d 20 91 d3 40 7f d1 2e b6 13
+    bb 29 d6 cd a0 9b f8 f2 3f bf b3 44 3e 3c 1b c9
+    68 c0 15 a7 18 07 8b 03 08 04 01 00 97 87 2b 5c
+    b6 28 1d e5 28 09 c3 bf 47 82 aa d0 a3 f2 eb 73
+    5d b1 93 77 72 f7 ff 59 10 db 55 71 4a 43 55 8b
+    72 a7 b5 1e 2b 63 eb aa 6c 88 76 bc 8d 27 42 69
+    fc bd 3e fb b0 06 6d c2 1e 60 88 18 df 6e 21 a8
+    4f 52 79 d0 15 3c 90 3f 2d 1b d0 92 43 4b 64 6b
+    9a fb f0 cc d8 a9 bc c8 1e 3c fe d5 31 9b 7c 1d
+    f7 31 a6 04 b9 4b bf 08 ef 3f 4e 2a 9a e3 19 43
+    21 60 3c 18 be 94 5c c4 92 c4 0a d5 35 cb 46 ee
+    a3 2c b1 80 0b 91 28 b2 47 f4 3f 91 35 89 74 61
+    0c 03 c1 9d 67 8c 48 36 d3 7a df eb 59 bb ed 89
+    84 9e 54 0b 39 1b e8 41 e2 cf f7 bf 45 17 c1 c5
+    68 e6 57 b1 15 fe 5d a9 1e e8 ef cb ba 99 0f ab
+    6a f7 96 20 63 e7 40 71 47 ad d8 43 d0 02 20 fe
+    07 96 df 86 6e 4e ef 1a a2 40 01 78 92 c3 19 91
+    fe db 03 1f ec d0 2c b6 d9 66 b3 90 86 ad ea b5
+    ea d1 08 23 29 7b 03 e8 dc 7a 5c c7
+>>> TLS 1.2, RecordHeader [length 0005]
+    16 03 03 00 04
+>>> TLS 1.2, Handshake [length 0004], ServerHelloDone
+    0e 00 00 00
+<<< TLS 1.2, RecordHeader [length 0005]
+    16 03 03 00 25
+<<< TLS 1.2, Handshake [length 0025], ClientKeyExchange
+    10 00 00 21 20 27 26 95 18 bd d0 0c d0 5d 3e bf
+    dd a5 a6 37 08 89 d9 79 1b 9f bb ba 9a 92 fd 83
+    55 ea c4 58 48
+<<< TLS 1.2, RecordHeader [length 0005]
+    14 03 03 00 01
+<<< TLS 1.2, RecordHeader [length 0005]
+    16 03 03 00 28
+<<< TLS 1.2, Handshake [length 0010], Finished
+    14 00 00 0c 0e 52 83 6e 64 df af 1b 68 24 8d 12
+>>> TLS 1.2, RecordHeader [length 0005]
+    16 03 03 00 ba
+>>> TLS 1.2, Handshake [length 00ba], NewSessionTicket
+    04 00 00 b6 00 00 1c 20 00 b0 60 e1 aa 9c 08 f2
+    91 32 3f 5e 76 7c 56 40 85 e9 47 2f a1 36 aa 3d
+    aa 38 5f 99 95 ad 5c 51 73 3a e5 75 3c 47 57 4b
+    73 e0 db c9 cc 01 88 82 42 d7 a1 8d 12 4c e9 2c
+    86 0e c0 b4 70 d6 97 07 b9 a2 b3 a0 4f 6a d7 ff
+    bb 76 89 84 d1 28 9e 55 cb c1 28 ee 5c 8b 08 80
+    7a 8e a9 91 44 1f 42 49 c7 c8 25 75 f6 27 81 b0
+    75 f5 20 07 c4 22 3b a8 5b 30 1c 3f 6c ef c3 01
+    2d eb fc 51 64 ce 27 0c 06 5f 45 86 db ef 47 5f
+    4c 1a 88 f7 ab c6 ec 3a 1f 85 03 c9 44 01 69 d8
+    33 5b 80 b9 e0 26 45 b1 e0 52 b6 cb 1d 82 ca ed
+    3a bf ab f1 88 1d 7d 65 b8 ec
+>>> TLS 1.2, RecordHeader [length 0005]
+    14 03 03 00 01
+>>> TLS 1.2, ChangeCipherSpec [length 0001]
+    01
+>>> TLS 1.2, RecordHeader [length 0005]
+    16 03 03 00 28
+>>> TLS 1.2, Handshake [length 0010], Finished
+    14 00 00 0c 5f 3c 26 82 ec 1e f4 34 5e a6 57 e0
+>>> TLS 1.2, RecordHeader [length 0005]
+    15 03 03 00 1a
+>>> TLS 1.2, Alert [length 0002], warning close_notify
+    01 00
