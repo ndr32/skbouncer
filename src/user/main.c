@@ -89,8 +89,7 @@ static void on_event(void *ctx, const struct skb_event *ev)
 	const char *reason = st->policy ? why : NULL;
 
 	/* A cgroup created since the last sync reached the kernel without its
-	 * rule. Out of scope the kernel only knows the default, and says so
-	 * in kernel_verdict. */
+	 * rule. Out of scope the kernel does not judge at all. */
 	if (st->enforce && v != ev->verdict && skb_enforce_in_scope(ev->cgroup_id))
 		fprintf(stderr, "skbouncer: kernel verdict %s, userspace %s "
 			"(cgroup %llu); policy map was stale\n",

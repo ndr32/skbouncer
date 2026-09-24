@@ -9,7 +9,7 @@
 #endif
 
 /* Bump on any layout change to struct skb_event. */
-#define SKB_EVENT_VERSION 6
+#define SKB_EVENT_VERSION 7
 
 #define SKB_MAX_CIPHERS   64	/* verifier needs a bounded walk */
 #define SKB_MAX_VERSIONS  8
@@ -49,6 +49,7 @@ enum skb_verdict {
 	SKB_VERDICT_ALLOW = 0,
 	SKB_VERDICT_VIOLATION,
 	SKB_VERDICT_UNKNOWN,	/* a constrained list was not seen in full */
+	SKB_VERDICT_NONE,	/* kernel only: outside --cgroup, not judged */
 };
 
 /* What the kernel did with the ClientHello. NONE outside enforce mode. */

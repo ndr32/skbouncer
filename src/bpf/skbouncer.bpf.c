@@ -469,16 +469,17 @@ int skb_tc(struct __sk_buff *skb)
 	else if (ev->trunc_reason == SKB_TRUNC_SEGMENT)
 		ev->trunc_reason = SKB_TRUNC_PARSE;
 
-	/* Out of scope still gets a verdict, but always passes. cgroup_rule
-	 * holds only in-scope cgroups, so there the verdict is the policy
-	 * default's. */
+	/* The kernel judges only in scope: cgroup_rule holds only in-scope
+	 * cgroups, so anywhere else it has no rule to judge by. */
 	if (enforce) {
-		ev->verdict = check_policy(ev);
 		ev->action = SKB_ACTION_PASS;
-		if (bpf_skb_ancestor_cgroup_id(skb, scope_level) == scope_id &&
-		    (ev->verdict == SKB_VERDICT_VIOLATION ||
-		     (ev->verdict == SKB_VERDICT_UNKNOWN && unknown_block)))
-			ev->action = SKB_ACTION_BLOCK;
+		ev->verdict = SKB_VERDICT_NONE;
+		if (bpf_skb_ancestor_cgroup_id(skb, scope_level) == scope_id) {
+			ev->verdict = check_policy(ev);
+			if (ev->verdict == SKB_VERDICT_VIOLATION ||
+			    (ev->verdict == SKB_VERDICT_UNKNOWN && unknown_block))
+				ev->action = SKB_ACTION_BLOCK;
+		}
 	}
 	act = ev->action == SKB_ACTION_BLOCK ? SKB_DROP : SKB_PASS;
 

@@ -904,3 +904,21 @@ matching,
 `scripts/guard.sh init`.
 
 Left clean: no skbouncer running, no skb_tc on any veth, no test containers.
+
+#### Review after iteration 2 (by hand)
+
+Iteration 2's pass was luck: the loop was right that `hs()` in
+verify-M6.6.sh piped into `grep -q` under pipefail, the same trap M3 hit.
+Fixed by capturing first; guard.sh's docker0 probe had the same pattern.
+M6.6's own checks then passed 3 of 3 against iteration 1's code.
+
+The loop also flagged verify-M6 comparing kernel_verdict out of scope,
+where the kernel holds no rule and reported the default. Decided: the
+kernel judges only in scope and reports kernel_verdict null elsewhere
+(new SKB_VERDICT_NONE, SKB_EVENT_VERSION 7); the check is now in scope only.
+
+Two harness races found while re-verifying: M6.5 and M6.6 read the
+server's view after skbouncer stopped, when a blocked ClientHello's next
+retransmit gets through (the documented limit). Measured: six blocked
+copies at 0.2-1.7 s intervals, then one delivered after stop. Both now
+sample at case time. Full chain M3-M6.6 then passed 3 of 3.
