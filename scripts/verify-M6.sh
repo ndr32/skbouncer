@@ -10,7 +10,8 @@
 #
 # Contract for skbouncer: in enforce mode every JSON event also has
 # "action": "block" | "pass", and "kernel_verdict": the verdict the tc program
-# reached, which must equal the userspace "verdict". Enforce mode refuses to start without
+# reached. In scope it must equal the userspace "verdict"; out of scope the
+# kernel decides nothing and it must be null. Enforce mode refuses to start without
 # --cgroup, with the root cgroup, without -p, or on a non-veth interface.
 #
 # Runs verify-M5.sh first (which runs M4 and M3). Blocking happens only on
@@ -148,6 +149,7 @@ for run in 1 2 3 4 5; do
 		python3 -c 'import json,sys
 port=sys.argv[1]
 print(json.dumps({"name": sys.argv[2]+"_"+port, "kind": "handshake", "port": int(port), "run": int(sys.argv[7]),
+    "in_scope": sys.argv[2] == "strict",
     "expect": sys.argv[3], "verdict": sys.argv[4], "why": sys.argv[5],
     "established": "CONNECTION ESTABLISHED" in open(sys.argv[6]+"/client-"+port+".log").read(),
     "server_saw_hello": "ClientHello" in open(sys.argv[6]+"/srv/"+port+".log").read()}))' \

@@ -16,11 +16,6 @@ const char *skb_container_lookup(struct skb_container_map *m, uint64_t cgroup_id
 /* Containers come and go; a miss should trigger one refresh before giving up. */
 int skb_container_refresh(struct skb_container_map *m);
 
-/* Bumped whenever an entry is added or renamed. */
-unsigned skb_container_generation(const struct skb_container_map *m);
-void skb_container_foreach(const struct skb_container_map *m,
-			   void (*fn)(void *ctx, uint64_t cgroup_id, const char *name),
-			   void *ctx);
 
 struct skb_container_info {
 	char ifname[IF_NAMESIZE];	/* host end of its veth */

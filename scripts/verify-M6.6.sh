@@ -70,8 +70,11 @@ wait_attached() {	# min_count
 	return 1
 }
 hs() {	# port args -> True if TLS was established
-	docker exec "$A" sh -c "timeout 4 openssl s_client -brief -connect $SIP:$1 $2 </dev/null 2>&1" |
-		grep -q 'CONNECTION ESTABLISHED' && echo True || echo False
+	# Captured, not piped: grep -q exits on the match, s_client then dies of
+	# SIGPIPE, and pipefail turned an established connection into False.
+	local o
+	o=$(docker exec "$A" sh -c "timeout 4 openssl s_client -brief -connect $SIP:$1 $2 </dev/null 2>&1")
+	[[ $o == *'CONNECTION ESTABLISHED'* ]] && echo True || echo False
 	sleep 0.3
 }
 alive() { pgrep -x skbouncer >/dev/null && echo True || echo False; }
@@ -146,6 +149,10 @@ wait_attached 1 || die "enforce instance never attached"
 docker exec "$A" sh -c "(printf 'hello\n'; sleep 1; printf '$JUNK_OCT') | nc -w 3 $SIP 4630"
 docker exec "$A" sh -c "(printf '$PLAIN'; sleep 1; printf '$CH_OCT') | nc -w 4 $SIP 4631"
 sleep 1
+# Sampled while enforcing: a blocked ClientHello keeps being retransmitted,
+# and one arriving after skbouncer stops would reach the server.
+JUNK_RX=$(stat -c %s "$OUT/srv/4630.bin" 2>/dev/null || echo 0)
+ST_RX=$(stat -c %s "$OUT/srv/4631.bin" 2>/dev/null || echo 0)
 
 # -- map, while the enforce instance runs with other containers present -----
 MAP_ENTRIES=$(sudo -n bpftool -j map dump name cgroup_rule 2>/dev/null |
@@ -174,8 +181,8 @@ json.dump({
   "coexist": {"enforcer_blocked": $BLOCKED, "auditor_events": $AUD_EVENTS,
               "auditor_attached_after_enforcer_exit": $AUD_ATTACHED,
               "auditor_events_after": $AUD_AFTER, "attached_after_both": $BOTH_GONE_ATTACHED},
-  "junk": {"sent": 6 + 69, "received": size(f"{out}/srv/4630.bin"), "events": len(actions(4630))},
-  "starttls": {"plaintext": 18, "received": size(f"{out}/srv/4631.bin"), "actions": actions(4631)},
+  "junk": {"sent": 6 + 69, "received": $JUNK_RX, "events": len(actions(4630))},
+  "starttls": {"plaintext": 18, "received": $ST_RX, "actions": actions(4631)},
   "map": {"entries": $MAP_ENTRIES, "in_scope": $IN_SCOPE, "other_containers": 4},
 }, open(f"{out}/cases.json", "w"), indent=1)
 PY

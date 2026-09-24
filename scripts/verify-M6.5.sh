@@ -114,9 +114,12 @@ if start ingress -i "$VETH" --format json; then
 fi
 
 ENF_RC=0
+EST89=False SEEN89=False EST90=False SEEN90=False
 if start enforce --container "$A" --mode enforce -p "$OUT/policy.json" --format json; then
-	hs 4489 "$DOWN" >/dev/null
-	hs 4490 "$OK" >/dev/null
+	# Sampled now, not at the end: a blocked ClientHello keeps being
+	# retransmitted, and one arriving after skbouncer stops gets through.
+	hs 4489 "$DOWN" >/dev/null; EST89=$(est 4489); SEEN89=$(seen 4489)
+	hs 4490 "$OK" >/dev/null;   EST90=$(est 4490); SEEN90=$(seen 4490)
 	sleep 1; stop_loader
 else
 	ENF_RC=1
@@ -148,9 +151,9 @@ json.dump({
   "ingress_default": {"events": $INGRESS},
   "enforce_cases": [
     {"name": "downgrade", "expect": "blocked", "rc_start": $ENF_RC, "err": err("enforce.err"),
-     "established": $(est 4489), "server_saw_hello": $(seen 4489)},
+     "established": $EST89, "server_saw_hello": $SEEN89},
     {"name": "complies",  "expect": "passed",  "rc_start": $ENF_RC, "err": err("enforce.err"),
-     "established": $(est 4490), "server_saw_hello": $(seen 4490)}],
+     "established": $EST90, "server_saw_hello": $SEEN90}],
 }, open(f"{out}/cases.json", "w"), indent=1)
 PY
 python3 tests/check_m6_5.py "$OUT"

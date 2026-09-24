@@ -67,7 +67,7 @@ guard_clean() {
 		echo "guard: $phase - skbouncer still running after SIGINT" >&2
 		ok=1
 	fi
-	if ! ip -4 addr show docker0 2>/dev/null | grep -q 'inet '; then
+	if [[ $(ip -4 addr show docker0 2>/dev/null) != *'inet '* ]]; then
 		echo "guard: $phase - docker0 has no IPv4 address (VM suspend strips it)." >&2
 		echo "guard:   fix: sudo systemctl restart docker" >&2
 		ok=1

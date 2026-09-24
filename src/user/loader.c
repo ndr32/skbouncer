@@ -13,21 +13,14 @@
 #include "loader.h"
 #include "skbouncer.skel.h"
 
-/* Our filter on the shared clsact hook. Fixed so a stale filter from a
- * killed run is replaced rather than stacked on top of. */
-#define SKB_TC_HANDLE   1
-#define SKB_TC_PRIORITY 1
-
 struct skb_loader {
 	struct skbouncer_bpf *skel;
 	struct ring_buffer *rb;
 	uint32_t prog_id;
 	char prog_name[16];	/* BPF_OBJ_NAME_LEN */
 
-	int ifindex;		/* 0 when not attached */
-	enum bpf_tc_attach_point point;
-	bool made_hook;		/* we created clsact, so we may remove it */
-	bool attached;
+	struct bpf_link *link;	/* NULL when not attached */
+	bool enforce;
 
 	void (*on_event)(void *ctx, const struct skb_event *ev);
 	void *ctx;
@@ -63,73 +56,27 @@ static int handle_event(void *ctx, void *data, size_t len)
 	return 0;
 }
 
-/* clsact is shared with anything else on the interface, so an existing hook
- * is not an error and must not be torn down on exit. Both directions live on
- * that one qdisc; only the filter chain differs. */
-static int attach_tc(struct skb_loader *ldr, const char *ifname,
-		     enum skb_direction dir)
+/* A tcx link, owned by this process: the kernel detaches it when the last
+ * fd goes, however the process ends. Other instances on the same hook keep
+ * their own links. An audit instance goes first so it also reports what an
+ * enforce instance drops; an enforce instance goes last. */
+static int attach_tcx(struct skb_loader *ldr, const char *ifname,
+		      enum skb_direction dir)
 {
-	LIBBPF_OPTS(bpf_tc_hook, hook);
-	LIBBPF_OPTS(bpf_tc_opts, tcopts,
-		    .handle = SKB_TC_HANDLE, .priority = SKB_TC_PRIORITY);
-	int err;
+	LIBBPF_OPTS(bpf_tcx_opts, opts, .flags = ldr->enforce ? 0 : BPF_F_BEFORE);
+	int ifindex = if_nametoindex(ifname);
 
-	ldr->ifindex = if_nametoindex(ifname);
-	if (!ldr->ifindex) {
+	if (!ifindex) {
 		fprintf(stderr, "skbouncer: no such interface '%s'\n", ifname);
 		return -1;
 	}
-	ldr->point = dir == SKB_DIR_INGRESS ? BPF_TC_INGRESS : BPF_TC_EGRESS;
-	hook.ifindex = ldr->ifindex;
-	hook.attach_point = ldr->point;
-
-	err = bpf_tc_hook_create(&hook);
-	if (err == 0) {
-		ldr->made_hook = true;
-	} else if (err != -EEXIST) {
-		fprintf(stderr, "skbouncer: cannot create clsact on %s: %s\n",
-			ifname, strerror(-err));
-		return -1;
-	}
-
-	tcopts.prog_fd = bpf_program__fd(ldr->skel->progs.skb_tc);
-	tcopts.flags = BPF_TC_F_REPLACE;
-	err = bpf_tc_attach(&hook, &tcopts);
-	if (err) {
+	ldr->link = bpf_program__attach_tcx(ldr->skel->progs.skb_tc, ifindex, &opts);
+	if (!ldr->link) {
 		fprintf(stderr, "skbouncer: cannot attach to %s %s: %s\n",
-			ifname, skb_direction_name(dir), strerror(-err));
-		if (ldr->made_hook) {
-			hook.attach_point = BPF_TC_EGRESS | BPF_TC_INGRESS;
-			bpf_tc_hook_destroy(&hook);
-			ldr->made_hook = false;
-		}
+			ifname, skb_direction_name(dir), strerror(errno));
 		return -1;
 	}
-
-	ldr->attached = true;
 	return 0;
-}
-
-static void detach_tc(struct skb_loader *ldr)
-{
-	LIBBPF_OPTS(bpf_tc_hook, hook);
-	LIBBPF_OPTS(bpf_tc_opts, tcopts,
-		    .handle = SKB_TC_HANDLE, .priority = SKB_TC_PRIORITY);
-
-	if (!ldr->ifindex)
-		return;
-	hook.ifindex = ldr->ifindex;
-	hook.attach_point = ldr->point;
-
-	if (ldr->attached)
-		bpf_tc_detach(&hook, &tcopts);
-
-	/* Destroying clsact takes every filter on the interface with it, so
-	 * only do it if the interface had none before us. */
-	if (ldr->made_hook) {
-		hook.attach_point = BPF_TC_EGRESS | BPF_TC_INGRESS;
-		bpf_tc_hook_destroy(&hook);
-	}
 }
 
 struct skb_loader *skb_loader_open(const struct skb_loader_opts *opts)
@@ -164,7 +111,12 @@ struct skb_loader *skb_loader_open(const struct skb_loader_opts *opts)
 	 * direction to label its events. */
 	ldr->skel->rodata->attach_dir = opts ? (__u8)opts->direction
 					     : SKB_DIR_EGRESS;
+	/* The section names ingress; the hook is chosen at load. */
+	if (opts && opts->direction == SKB_DIR_EGRESS)
+		bpf_program__set_expected_attach_type(ldr->skel->progs.skb_tc,
+						      BPF_TCX_EGRESS);
 	if (opts && opts->enforce) {
+		ldr->enforce = true;
 		ldr->skel->rodata->enforce = 1;
 		ldr->skel->rodata->unknown_block = opts->unknown_block;
 		ldr->skel->rodata->scope_id = opts->scope_id;
@@ -209,7 +161,7 @@ struct skb_loader *skb_loader_open(const struct skb_loader_opts *opts)
 int skb_loader_attach(struct skb_loader *ldr, const char *ifname,
 		      enum skb_direction dir)
 {
-	return attach_tc(ldr, ifname, dir);
+	return attach_tcx(ldr, ifname, dir);
 }
 
 int skb_loader_set_rule(struct skb_loader *ldr, uint32_t slot,
@@ -224,6 +176,19 @@ int skb_loader_set_cgroup(struct skb_loader *ldr, uint64_t cgroup_id,
 {
 	return bpf_map__update_elem(ldr->skel->maps.cgroup_rule, &cgroup_id,
 				    sizeof(cgroup_id), &slot, sizeof(slot), BPF_ANY);
+}
+
+int skb_loader_del_cgroup(struct skb_loader *ldr, uint64_t cgroup_id)
+{
+	return bpf_map__delete_elem(ldr->skel->maps.cgroup_rule, &cgroup_id,
+				    sizeof(cgroup_id), 0);
+}
+
+int skb_loader_next_cgroup(struct skb_loader *ldr, const uint64_t *prev,
+			   uint64_t *next)
+{
+	return bpf_map__get_next_key(ldr->skel->maps.cgroup_rule, prev, next,
+				     sizeof(*next));
 }
 
 int skb_loader_stats(const struct skb_loader *ldr, uint64_t *out, size_t n)
@@ -264,7 +229,7 @@ void skb_loader_close(struct skb_loader *ldr)
 {
 	if (!ldr)
 		return;
-	detach_tc(ldr);
+	bpf_link__destroy(ldr->link);
 	ring_buffer__free(ldr->rb);
 	skbouncer_bpf__destroy(ldr->skel);
 	free(ldr);

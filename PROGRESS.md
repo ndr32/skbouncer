@@ -742,7 +742,10 @@ Left clean: no skbouncer, no skb_tc attachments, no test containers.
 
 ## M6.6 — hardening from the codebase review
 
-Status: not started. Done when `scripts/verify-M6.6.sh` passes.
+Status: STOPPED, verifier flaw. All seven items are in, and every check
+passes, but `verify-M6.6.sh` fails at random: its `hs()` reports an
+established handshake as failed about half the time (Iteration 1). Needs
+a human fix to the verifier; see below.
 
 ### Baseline
 
@@ -770,3 +773,152 @@ first segments under 6 bytes are not detected.
 ### Iterations
 
 <!-- append below -->
+
+#### Iteration 1 — tcx, structural checks, scoped map, verifier flaw
+
+What changed:
+
+1. **tcx.** `skb_tc` is `SEC("tcx/ingress")`; the loader switches the
+   expected attach type to `BPF_TCX_EGRESS` for `-d egress` and attaches with
+   `bpf_program__attach_tcx()`. The link belongs to the process, so any death
+   detaches it. The clsact hook, handle and priority code is gone. SIGHUP and
+   SIGPIPE are caught like SIGINT, so both still print the counters.
+2. **Coexistence.** Pass is `TCX_NEXT`, not `TCX_PASS`, so the chain goes on
+   to the next program. An audit instance attaches with `BPF_F_BEFORE`, so it
+   sits first and also reports what an enforce instance drops. An enforce
+   instance appends.
+3. **Structural checks.** `not_a_hello()` runs before anything is counted or
+   reported. It rejects a handshake length under 41 (the smallest possible
+   ClientHello body), a handshake length shorter than the record body (a
+   ClientHello record holds nothing else), and a legacy_version major byte
+   other than 3. Each check runs only when the segment holds the bytes, so a
+   6-byte first segment is still detected. A handshake length *longer* than
+   the record is allowed, so a ClientHello split across records still works.
+   The walk's old record-trimming branch could no longer be reached and is
+   gone. Any segment can still start a ClientHello (STARTTLS).
+4. **cgroup_rule.** `skb_enforce_sync()` walks the `--cgroup` tree (depth 8),
+   writes each cgroup's rule slot, then deletes every key not found in that
+   walk. The kernel map now holds the scope only, and a removed cgroup goes
+   at the next sync. The container generation/foreach API is gone, since
+   nothing else used it.
+5. **Clock.** The refresh and sync run when at least 1000 ms of
+   CLOCK_MONOTONIC have passed since the last one, however often `poll()`
+   returns. The per-event sync is gone.
+6. **kernel_verdict** is printed next to `action`, from `ev->verdict`. No
+   layout change, so `SKB_EVENT_VERSION` stays 6.
+7. **SKB_STAT_SHORT** counts a 1-5 byte segment whose bytes start like a
+   handshake record (0x16, then 0x03 if present). The exit line is now
+   "N ClientHello detected, N delivered, N dropped (ringbuf full), N too
+   short to classify".
+
+How items 5 and 7 were confirmed (neither has a verifier check):
+
+- Clock: a temporary build printed a timestamp at each refresh, in enforce
+  mode, while a container ran back-to-back handshakes for 6 s (76 events).
+  The nine refresh intervals were 1057-1145 ms. The print is removed.
+- Short counter: segments `16 03`, `16`, `16 03 03` and `17 03`, each
+  followed 1 s later by `x`, each on its own connection. It counted 3. A
+  `bpf_printk` confirmed each segment reached the hook on its own. Note:
+  busybox `nc -l` serves one connection and ignores `-k`, which made an
+  earlier attempt look like a miss.
+- A ClientHello re-framed as two records (60 handshake bytes, then the rest)
+  is detected: an `unknown` event, passed, kernel_verdict equal.
+
+Verifier, first full run:
+
+    PASS: 7 cases, 0 failures      (M3)
+    PASS: 4 cases, 0 failures      (M4)
+    PASS: 13 cases, 0 failures     (M5)
+    PASS: 16 cases, 0 failures     (M6)
+    PASS: 0 failures               (M6.5)
+    FAIL: dies of SIGPIPE: a violating handshake is still blocked with no skbouncer running
+    FAIL: 1 failures
+
+cases.json for that run: SIGPIPE `alive false, attached false,
+traffic_after false`. Every other M6.6 check passed: SIGHUP and SIGUSR2
+clean, coexist all true, junk 75/75 bytes with 0 events, STARTTLS 18
+bytes with a block, map 1 entry with 1 in scope.
+
+Running only the M6.6 part again (a /tmp copy without the regression)
+failed 4 of 4 times, on 1-3 of the three `traffic_after` checks, at
+random. Saving each handshake's output to a file instead of piping it
+made it pass 5 of 5, with every handshake established.
+
+**The verifier is wrong.** `hs()` runs
+`docker exec ... | grep -q 'CONNECTION ESTABLISHED' && echo True || echo False`
+under `set -o pipefail`. `grep -q` exits on the match. `s_client -brief`
+writes more lines after it, so `docker exec` dies of SIGPIPE (141), and
+`pipefail` turns the pipeline into "False". Measured with nothing attached
+and no skbouncer running, 12 plain handshakes: PIPESTATUS was `141 0` 9
+times and `0 0` 3 times. The same `hs()` in a script gave 29 True out of
+60, and 60 of 60 once `pipefail` was off. The other `hs()` calls in the
+script cope with a false "False"; `traffic_after` needs True, so the
+deaths check fails at random whatever skbouncer does.
+
+Suggested fix, for a human: in `hs()`, drop `-q` (`grep ... >/dev/null`
+reads to EOF), or capture first:
+`o=$(docker exec ...); grep -q ... <<<"$o"`. Then `scripts/guard.sh init`.
+
+Also flagged, not a verifier failure: cgroup_rule now holds only in-scope
+cgroups, so an out-of-scope event's kernel_verdict is the policy default,
+not its container's rule. verify-M6 requires kernel_verdict == verdict on
+every event, including the out-of-scope `legacy` and `stranger` runs. It
+passes only because `legacy` violates its own rule and the default is
+deny. Either the kernel should report no verdict out of scope, or the check
+should cover in-scope events only. For the author to decide.
+
+Left clean: no skbouncer, no skb_tc attachments, no test containers.
+
+#### loop: scripts/verify-M6.6.sh after iteration 1 (2026-09-24 13:40 UTC)
+
+    verify: M6.5 regression (includes M6, M5, M4, M3)
+    PASS: 7 cases, 0 failures
+    PASS: 4 cases, 0 failures
+    PASS: 13 cases, 0 failures
+    PASS: 16 cases, 0 failures
+    PASS: 0 failures
+    scripts/verify-M6.6.sh: line 1: 209925 User defined signal 2      "${enforce_cmd[@]}" > /dev/null 2>&1
+    FAIL: dies of SIGPIPE: a violating handshake is still blocked with no skbouncer running
+    FAIL: dies of SIGUSR2: a violating handshake is still blocked with no skbouncer running
+    FAIL: 2 failures
+
+#### Iteration 2 — no code change; the verifier flaw still blocks
+
+`scripts/verify-M6.6.sh` is unchanged since 657bbfe. `hs()` (line 72-74)
+still pipes `docker exec ... s_client` into `grep -q` under
+`set -uo pipefail`. That is the SIGPIPE false "False" iteration 1 measured.
+
+This run's cases.json fits that and nothing else: all three deaths
+are `alive false, attached false`. Only `traffic_after` varies (SIGHUP
+true, SIGPIPE and SIGUSR2 false). SIGHUP and SIGUSR2 go through the same
+code path. Once `attached` is false, no skb_tc is on the veth, so nothing
+in skbouncer can block the handshake. Iteration 1's run failed only
+SIGPIPE; this one fails SIGPIPE and SIGUSR2. The failures move around,
+as a flake does. Every other check passed (coexist, junk 75/75 with 0
+events, STARTTLS block, the M3-M6.5 regressions).
+
+Stopping, per the rules. The fix, for a human: in `hs()` capture before
+matching,
+`o=$(docker exec "$A" sh -c "..."); grep -q 'CONNECTION ESTABLISHED' <<<"$o"`
+(the same pattern `n_attached()` already uses, two lines above), then
+`scripts/guard.sh init`.
+
+Left clean: no skbouncer running, no skb_tc on any veth, no test containers.
+
+#### Review after iteration 2 (by hand)
+
+Iteration 2's pass was luck: the loop was right that `hs()` in
+verify-M6.6.sh piped into `grep -q` under pipefail, the same trap M3 hit.
+Fixed by capturing first; guard.sh's docker0 probe had the same pattern.
+M6.6's own checks then passed 3 of 3 against iteration 1's code.
+
+The loop also flagged verify-M6 comparing kernel_verdict out of scope,
+where the kernel holds no rule and reported the default. Decided: the
+kernel judges only in scope and reports kernel_verdict null elsewhere
+(new SKB_VERDICT_NONE, SKB_EVENT_VERSION 7); the check is now in scope only.
+
+Two harness races found while re-verifying: M6.5 and M6.6 read the
+server's view after skbouncer stopped, when a blocked ClientHello's next
+retransmit gets through (the documented limit). Measured: six blocked
+copies at 0.2-1.7 s intervals, then one delivered after stop. Both now
+sample at case time. Full chain M3-M6.6 then passed 3 of 3.

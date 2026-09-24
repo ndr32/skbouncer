@@ -491,6 +491,7 @@ const char *skb_verdict_str(enum skb_verdict v)
 	case SKB_VERDICT_ALLOW:     return "allow";
 	case SKB_VERDICT_VIOLATION: return "violation";
 	case SKB_VERDICT_UNKNOWN:   return "unknown";
+	case SKB_VERDICT_NONE:      return "none";
 	}
 	return "invalid";
 }

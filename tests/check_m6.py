@@ -54,10 +54,14 @@ def check(events, cases):
         if actions != {want_action}:
             fails.append(f"{name}: action = {sorted(map(str, actions))}, expected {want_action!r}")
         for ev in got:
-            if ev.get("kernel_verdict") != ev.get("verdict"):
-                fails.append(f"{name}: kernel_verdict = {ev.get('kernel_verdict')!r} but "
-                             f"userspace verdict = {ev.get('verdict')!r}; the kernel's copy of "
-                             f"the policy has drifted")
+            kv = ev.get("kernel_verdict")
+            if case["in_scope"] and kv != ev.get("verdict"):
+                fails.append(f"{name}: kernel_verdict = {kv!r} but userspace verdict = "
+                             f"{ev.get('verdict')!r}; the kernel's copy of the policy has drifted")
+                break
+            if not case["in_scope"] and kv not in (None, "none"):
+                fails.append(f"{name}: kernel_verdict = {kv!r} out of scope; the kernel holds no "
+                             f"rule for this cgroup, so it must not report a verdict")
                 break
         verdicts = {ev.get("verdict") for ev in got}
         if verdicts != {case["verdict"]}:
