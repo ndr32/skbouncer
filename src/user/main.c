@@ -270,42 +270,33 @@ static int parse_args(int argc, char **argv, struct options *opt)
 /* After --container has filled in -i and --cgroup. */
 static int check_args(struct options *opt)
 {
+	const char *why = NULL;
+
 	/* Container traffic is ingress on the host end of its veth. */
 	if (!opt->direction_set && opt->ifname && skb_enforce_is_veth(opt->ifname))
 		opt->direction = SKB_DIR_INGRESS;
 
-	if (opt->mode == MODE_ENFORCE) {
-		const char *why = NULL;
-
-		if (!opt->cgroup_path) {
-			fprintf(stderr, "skbouncer: enforce mode requires --cgroup\n");
-			return -1;
-		}
-		if (!cgroup_path_is_safe(opt->cgroup_path, &why)) {
-			fprintf(stderr, "skbouncer: unsafe --cgroup '%s': %s\n",
-				opt->cgroup_path, why);
-			return -1;
-		}
-		if (!opt->policy_path) {
-			fprintf(stderr, "skbouncer: enforce mode requires a policy (-p)\n");
-			return -1;
-		}
-		/* The host's own traffic, SSH included, never crosses a veth. */
-		if (!opt->ifname || !skb_enforce_is_veth(opt->ifname)) {
-			fprintf(stderr, "skbouncer: enforce mode only attaches to a veth; "
-				"%s is not one\n", opt->ifname ? opt->ifname : "no -i given");
-			return -1;
-		}
-	} else if (opt->cgroup_path) {
-		const char *why = NULL;
-
-		if (!cgroup_path_is_safe(opt->cgroup_path, &why)) {
-			fprintf(stderr, "skbouncer: unsafe --cgroup '%s': %s\n",
-				opt->cgroup_path, why);
-			return -1;
-		}
+	if (opt->cgroup_path && !cgroup_path_is_safe(opt->cgroup_path, &why)) {
+		fprintf(stderr, "skbouncer: unsafe --cgroup '%s': %s\n",
+			opt->cgroup_path, why);
+		return -1;
 	}
-
+	if (opt->mode != MODE_ENFORCE)
+		return 0;
+	if (!opt->cgroup_path) {
+		fprintf(stderr, "skbouncer: enforce mode requires --cgroup\n");
+		return -1;
+	}
+	if (!opt->policy_path) {
+		fprintf(stderr, "skbouncer: enforce mode requires a policy (-p)\n");
+		return -1;
+	}
+	/* The host's own traffic, SSH included, never crosses a veth. */
+	if (!opt->ifname || !skb_enforce_is_veth(opt->ifname)) {
+		fprintf(stderr, "skbouncer: enforce mode only attaches to a veth; "
+			"%s is not one\n", opt->ifname ? opt->ifname : "no -i given");
+		return -1;
+	}
 	return 0;
 }
 
