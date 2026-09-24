@@ -670,3 +670,22 @@ also continue from the orphaned socket after the client exits: a 4473
 retransmission from run 1 showed up in run 2's events. Coverage counts
 must dedupe by tuple, not count events. Left clean: no skbouncer, no
 skb_tc, no test containers.
+
+## M6.5 — make the CLI usable
+
+Status: not started. Done when `scripts/verify-M6.5.sh` passes.
+
+### Baseline
+
+- `--container` and `--version` do not exist; watching a container needs
+  its veth found by hand and `--direction ingress`.
+- Against the M6 build with explicit `-i`/`--cgroup` flags, the verifier's
+  21 failures are all new features: no `--version`, no `--container`, a
+  startup banner on JSON stdout, no `reason` or `time`, raw version codes and
+  monotonic time in text, the bpftool hint, egress as the veth default.
+  Verdicts, container names and enforce blocking already pass.
+- One verifier run takes about 100 s including the M6-M3 regressions.
+
+### Iterations
+
+<!-- append below -->
