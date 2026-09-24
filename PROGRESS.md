@@ -606,7 +606,7 @@ now covers it with a long ALPN list, both unknown and violation-despite-cut. Lef
 
 ## M6 — enforce mode
 
-Status: not started. Done when `scripts/verify-M6.sh` passes.
+Status: done — `scripts/verify-M6.sh` passes.
 
 ### Baseline
 
@@ -622,3 +622,51 @@ Status: not started. Done when `scripts/verify-M6.sh` passes.
 ### Iterations
 
 <!-- append below -->
+
+#### Iteration 1 — policy compiled into maps, verdict and drop in tc
+
+Kernel (`SKB_EVENT_VERSION` 5 -> 6): the old `_pad` byte becomes `action`
+(none/pass/block). A tail `verdict` byte (plus 7 pad bytes) holds the
+kernel's own verdict, so userspace can check it against its own. The
+policy lives in two maps:
+`cgroup_rule` (hash, cgroup id -> rule slot) and `rules` (array, 65
+slots). Slot 0 is the default and the rest are the rules in order. Each
+`struct skb_krule` carries min_version, flags and a 65536-bit cipher
+bitmap, so a cipher check is one load. `check_policy()` mirrors
+`skb_policy_check()` line for line. A cgroup missing from the map gets slot
+0, which is also what an unnamed container gets in userspace. Scope comes
+from rodata `scope_id`/`scope_level` via `bpf_skb_ancestor_cgroup_id()`.
+Out-of-scope events still get a verdict but always pass. A block returns
+TC_ACT_SHOT. If the ringbuf is full the event is built in a per-CPU
+scratch slot, so enforcement never depends on room to report it. An
+unwritten rule slot (no VALID flag) fails open.
+
+Userspace: `policy.c` accepts `on_unknown` and compiles rules
+(`skb_policy_compile`). The new `enforce.c` resolves `--cgroup` with
+realpath and checks for cgroup2. It rejects anything that resolves to the
+root or lies outside /sys/fs/cgroup. The id is the inode and the level is
+the path depth. It detects veth via ETHTOOL_GDRVINFO and syncs the maps.
+`skb_loader_open()` no longer attaches, because the maps must be filled
+before `skb_loader_attach()`. After that the container map is refreshed
+every ~1 s and after each event, and re-synced whenever its generation
+changes. Refusal order: no --cgroup, root, no -p, and not a veth (a
+missing -i is also refused). JSON gains `"action"` in enforce mode, and
+text gains an ACTION column.
+
+The verifier passed on the first run:
+
+    PASS: 6 cases, 0 failures      (M3)
+    PASS: 4 cases, 0 failures      (M4)
+    PASS: 13 cases, 0 failures     (M5)
+    PASS: 13 cases, 0 failures
+
+Kernel and userspace verdicts agreed on every event (no mismatch warnings
+on stderr). Split PQC (4474): 1443 of 1833 bytes, allow, pass. Long ALPN:
+unknown, pass in run 1 (4475), block in run 2 (4478).
+
+For M7: a blocked ClientHello is retransmitted by TCP, and each
+retransmission is a new event, so 4472 gave 8 block events. Retransmits
+also continue from the orphaned socket after the client exits: a 4473
+retransmission from run 1 showed up in run 2's events. Coverage counts
+must dedupe by tuple, not count events. Left clean: no skbouncer, no
+skb_tc, no test containers.

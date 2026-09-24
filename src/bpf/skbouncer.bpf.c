@@ -5,7 +5,8 @@
 
 #include "skbouncer.h"
 
-#define TC_ACT_OK 0
+#define TC_ACT_OK   0
+#define TC_ACT_SHOT 2
 
 #define ETH_P_IP  0x0800
 #define ETH_HLEN  14
@@ -30,6 +31,39 @@ char LICENSE[] SEC("license") = "GPL";
  * the kernel which clsact hook it sits on, and the answer matters: it is
  * what identifies the container. See enum skb_direction. */
 const volatile __u8 attach_dir = SKB_DIR_EGRESS;
+
+/* Enforce mode, set by the loader before load. Only sockets in the cgroup
+ * scope_id, at scope_level, or below it are ever blocked. */
+const volatile __u8  enforce = 0;
+const volatile __u8  unknown_block = 0;	/* policy "on_unknown": "block" */
+const volatile __u32 scope_level = 0;
+const volatile __u64 scope_id = 0;
+
+/* The compiled policy. Userspace fills both before attaching, and keeps
+ * cgroup_rule current as containers appear. A cgroup not in it matched no
+ * rule, so it gets rules[0], the policy default. */
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, SKB_MAX_CGROUPS);
+	__type(key, __u64);
+	__type(value, __u32);
+} cgroup_rule SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, SKB_MAX_RULES + 1);
+	__type(key, __u32);
+	__type(value, struct skb_krule);
+} rules SEC(".maps");
+
+/* Where the event is built when the ringbuf is full: enforcement must not
+ * depend on there being room to report it. */
+struct {
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, struct skb_event);
+} scratch SEC(".maps");
 
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
@@ -189,6 +223,56 @@ static __always_inline __u8 walk_hello(struct __sk_buff *skb,
 	return SKB_TRUNC_EXT_LIMIT;
 }
 
+static __always_inline int is_grease(__u16 v)
+{
+	return (v & 0x0f0f) == 0x0a0a && (v >> 8) == (v & 0xff);
+}
+
+/* skb_policy_check() in userspace, which it must agree with. */
+static __always_inline __u8 check_policy(const struct skb_event *ev)
+{
+	const struct skb_krule *r;
+	__u32 zero = 0, *slot;
+	int partial = 0, i;
+
+	slot = bpf_map_lookup_elem(&cgroup_rule, &ev->cgroup_id);
+	r = bpf_map_lookup_elem(&rules, slot ? slot : &zero);
+	if (!r || !(r->flags & SKB_KRULE_VALID))
+		return SKB_VERDICT_ALLOW;
+	if (r->flags & SKB_KRULE_FIXED)
+		return r->fixed;
+
+	if (!(r->flags & SKB_KRULE_ANY_CIPHER)) {
+		for (i = 0; i < SKB_MAX_CIPHERS && i < ev->n_ciphers; i++) {
+			__u16 c = bpf_ntohs(ev->ciphers[i]);
+
+			if (is_grease(c) || c == 0x00ff || c == 0x5600)
+				continue;
+			if (!((r->ciphers[c >> 6] >> (c & 63)) & 1))
+				return SKB_VERDICT_VIOLATION;
+		}
+		if (!(ev->seen & SKB_SEEN_CIPHERS))
+			partial = 1;
+	}
+
+	if (r->min_version) {
+		if (ev->n_versions) {
+			for (i = 0; i < SKB_MAX_VERSIONS && i < ev->n_versions; i++) {
+				__u16 v = bpf_ntohs(ev->versions[i]);
+
+				if (!is_grease(v) && v < r->min_version)
+					return SKB_VERDICT_VIOLATION;
+			}
+		} else if (ev->seen & SKB_SEEN_VERSIONS) {
+			if (ev->legacy_version < r->min_version)
+				return SKB_VERDICT_VIOLATION;
+		}
+		if (!(ev->seen & SKB_SEEN_VERSIONS))
+			partial = 1;
+	}
+	return partial ? SKB_VERDICT_UNKNOWN : SKB_VERDICT_ALLOW;
+}
+
 /* One program for both clsact hooks - the parse is direction-agnostic, and
  * a container's outbound handshake arrives on the INGRESS side of its veth.
  *
@@ -207,6 +291,7 @@ int skb_tc(struct __sk_buff *skb)
 	__u32 l4_off, pay_off, avail, seg_len, body_len;
 	__u16 record_len, captured_len;
 	__u8 tls[TLS_SNIFF_LEN];
+	int reported = 1, act;
 
 	/* L2/L3/L4 headers are always in the linear area at either hook, so
 	 * direct access is safe here. The payload is not: tcp_sendmsg parks it
@@ -292,8 +377,15 @@ int skb_tc(struct __sk_buff *skb)
 
 	ev = bpf_ringbuf_reserve(&events, sizeof(*ev), 0);
 	if (!ev) {
+		__u32 zero = 0;
+
 		bump(SKB_STAT_DROPPED);
-		return TC_ACT_OK;
+		if (!enforce)
+			return TC_ACT_OK;
+		ev = bpf_map_lookup_elem(&scratch, &zero);
+		if (!ev)
+			return TC_ACT_OK;
+		reported = 0;
 	}
 	/* Reserved ringbuf memory is not zeroed, and the walk may stop before
 	 * filling every field. */
@@ -319,6 +411,19 @@ int skb_tc(struct __sk_buff *skb)
 	else if (ev->trunc_reason == SKB_TRUNC_SEGMENT)
 		ev->trunc_reason = SKB_TRUNC_PARSE;
 
-	bpf_ringbuf_submit(ev, 0);
-	return TC_ACT_OK;
+	/* Out of scope still gets a verdict, so the event can say what
+	 * would have happened, but always passes. */
+	if (enforce) {
+		ev->verdict = check_policy(ev);
+		ev->action = SKB_ACTION_PASS;
+		if (bpf_skb_ancestor_cgroup_id(skb, scope_level) == scope_id &&
+		    (ev->verdict == SKB_VERDICT_VIOLATION ||
+		     (ev->verdict == SKB_VERDICT_UNKNOWN && unknown_block)))
+			ev->action = SKB_ACTION_BLOCK;
+	}
+	act = ev->action == SKB_ACTION_BLOCK ? TC_ACT_SHOT : TC_ACT_OK;
+
+	if (reported)
+		bpf_ringbuf_submit(ev, 0);
+	return act;
 }
