@@ -868,3 +868,39 @@ deny. Either the kernel should report no verdict out of scope, or the check
 should cover in-scope events only. For the author to decide.
 
 Left clean: no skbouncer, no skb_tc attachments, no test containers.
+
+#### loop: scripts/verify-M6.6.sh after iteration 1 (2026-09-24 13:40 UTC)
+
+    verify: M6.5 regression (includes M6, M5, M4, M3)
+    PASS: 7 cases, 0 failures
+    PASS: 4 cases, 0 failures
+    PASS: 13 cases, 0 failures
+    PASS: 16 cases, 0 failures
+    PASS: 0 failures
+    scripts/verify-M6.6.sh: line 1: 209925 User defined signal 2      "${enforce_cmd[@]}" > /dev/null 2>&1
+    FAIL: dies of SIGPIPE: a violating handshake is still blocked with no skbouncer running
+    FAIL: dies of SIGUSR2: a violating handshake is still blocked with no skbouncer running
+    FAIL: 2 failures
+
+#### Iteration 2 — no code change; the verifier flaw still blocks
+
+`scripts/verify-M6.6.sh` is unchanged since 657bbfe. `hs()` (line 72-74)
+still pipes `docker exec ... s_client` into `grep -q` under
+`set -uo pipefail`. That is the SIGPIPE false "False" iteration 1 measured.
+
+This run's cases.json fits that and nothing else: all three deaths
+are `alive false, attached false`. Only `traffic_after` varies (SIGHUP
+true, SIGPIPE and SIGUSR2 false). SIGHUP and SIGUSR2 go through the same
+code path. Once `attached` is false, no skb_tc is on the veth, so nothing
+in skbouncer can block the handshake. Iteration 1's run failed only
+SIGPIPE; this one fails SIGPIPE and SIGUSR2. The failures move around,
+as a flake does. Every other check passed (coexist, junk 75/75 with 0
+events, STARTTLS block, the M3-M6.5 regressions).
+
+Stopping, per the rules. The fix, for a human: in `hs()` capture before
+matching,
+`o=$(docker exec "$A" sh -c "..."); grep -q 'CONNECTION ESTABLISHED' <<<"$o"`
+(the same pattern `n_attached()` already uses, two lines above), then
+`scripts/guard.sh init`.
+
+Left clean: no skbouncer running, no skb_tc on any veth, no test containers.
