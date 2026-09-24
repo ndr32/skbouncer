@@ -106,9 +106,9 @@ static void on_event(void *ctx, const struct skb_event *ev)
 	skb_event_print(stdout, ev, name, verdict, reason);
 }
 
-/* The detected/delivered/dropped split is the coverage denominator M7
- * needs: an event lost to a full ringbuf must not look like a connection
- * that never happened. */
+/* The detected/delivered/dropped split is the coverage denominator: an event
+ * lost to a full ringbuf must not look like a connection that never
+ * happened. */
 static void report(const struct skb_loader *ldr, const struct run_state *st)
 {
 	uint64_t stat[SKB_STAT__MAX];
@@ -130,7 +130,7 @@ static void report(const struct skb_loader *ldr, const struct run_state *st)
 		(unsigned long long)stat[SKB_STAT_SHORT]);
 
 	/* Detected but neither delivered nor counted as dropped means the
-	 * loss is somewhere else, which would silently bias M7. */
+	 * loss is somewhere else, which would silently bias coverage. */
 	if (stat[SKB_STAT_DETECTED] != st->events + stat[SKB_STAT_DROPPED])
 		fprintf(stderr, "skbouncer: counters do not balance; "
 			"event loss is unaccounted for\n");

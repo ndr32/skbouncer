@@ -33,7 +33,7 @@ static inline int skb_cipher_ignored(__u16 c)
 	return skb_is_grease(c) || c == SKB_SCSV_RENEGOTIATION || c == SKB_SCSV_FALLBACK;
 }
 
-/* Kernel-side tallies. M7 needs a denominator: an event lost to a full
+/* Kernel-side tallies, the coverage denominator: an event lost to a full
  * ringbuf must not look like a connection that never happened. */
 enum skb_stat {
 	SKB_STAT_DETECTED = 0,	/* ClientHello matched */

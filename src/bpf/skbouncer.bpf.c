@@ -384,19 +384,10 @@ int skb_tc(struct __sk_buff *skb)
 	tuple.sport = tcp->source;
 	tuple.dport = tcp->dest;
 
-	/* How much of the record reaches the peer in the segment that
-	 * carries its header.
-	 *
-	 * tc egress runs BEFORE segmentation offload, so on a GSO skb
-	 * skb->len spans the whole super-packet rather than one wire segment
-	 * and would overstate what the first segment holds. Measured here: a
-	 * 1557-byte ClientHello arrived as a single skb with gso_size=1460
-	 * and gso_segs=2, i.e. two segments on the wire. Without this clamp
-	 * every handshake looks unfragmented and M7 measures nothing.
-	 *
-	 * The same holds at veth ingress: veth forwards GSO skbs whole, so the
-	 * container's super-packet is still unsegmented when it lands here and
-	 * gso_size carries the container's MSS. */
+	/* How much of the record the first wire segment carries. Both hooks
+	 * run before segmentation (veth forwards GSO skbs whole), so skb->len
+	 * can span several wire segments; gso_size is what one of them holds.
+	 * Without this clamp no ClientHello would ever look split. */
 	avail = skb->len - pay_off;
 	seg_len = skb->gso_size;
 	if (seg_len >= TLS_SNIFF_LEN && seg_len < avail)
@@ -449,8 +440,7 @@ int skb_tc(struct __sk_buff *skb)
 	 * filling every field. */
 	__builtin_memset(ev, 0, sizeof(*ev));
 
-	/* Expected to be 0 on a forwarded skb, which has no local socket.
-	 * Recorded rather than relied on: the interface is the identity. */
+	/* Names the container; 0 on a forwarded skb, which has no socket. */
 	ev->cgroup_id = bpf_skb_cgroup_id(skb);
 	ev->ktime_ns = bpf_ktime_get_ns();
 	ev->tuple = tuple;
