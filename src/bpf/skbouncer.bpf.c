@@ -37,9 +37,8 @@
 
 char LICENSE[] SEC("license") = "GPL";
 
-/* Set by the loader before load, from --direction. The program cannot ask
- * the kernel which clsact hook it sits on, and the answer matters: it is
- * what identifies the container. See enum skb_direction. */
+/* Set by the loader before load, from --direction: the program cannot ask
+ * the kernel which tcx hook it sits on. See enum skb_direction. */
 const volatile __u8 attach_dir = SKB_DIR_EGRESS;
 
 /* Enforce mode, set by the loader before load. Only sockets in the cgroup

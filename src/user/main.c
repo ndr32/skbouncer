@@ -145,7 +145,7 @@ static void usage(FILE *out, const char *argv0)
 "Watches TLS ClientHellos and checks them against a policy.\n"
 "\n"
 "  -C, --container <name> watch this Docker container: its veth, ingress\n"
-"  -i, --iface <dev>     attach to clsact on <dev> instead\n"
+"  -i, --iface <dev>     attach to <dev> instead\n"
 "  -d, --direction <d>   ingress (default on a veth) or egress (default\n"
 "                        elsewhere)\n"
 "  -c, --cgroup <path>   restrict enforcement to this cgroup v2 path\n"

@@ -26,10 +26,11 @@ enum skb_stat {
 	SKB_STAT__MAX,
 };
 
-/* Which clsact hook the program sits on. Container identity comes from the
- * attachment point, not from cgroup_id: a bridged container's packet is
- * already forwarded and SNATed by the time it reaches the physical
- * interface, so it is watched as INGRESS on the host side of its veth. */
+/* Which tcx hook the program sits on. A bridged container is watched as
+ * INGRESS on the host side of its veth, where the tuple is still pre-NAT;
+ * by the physical interface it is forwarded, SNATed and has no cgroup id.
+ * The container itself is named by cgroup_id: containers sharing a network
+ * namespace share one veth. */
 enum skb_direction {
 	SKB_DIR_EGRESS = 0,
 	SKB_DIR_INGRESS,
