@@ -164,6 +164,12 @@ struct skb_loader *skb_loader_open(const struct skb_loader_opts *opts)
 	 * direction to label its events. */
 	ldr->skel->rodata->attach_dir = opts ? (__u8)opts->direction
 					     : SKB_DIR_EGRESS;
+	if (opts && opts->enforce) {
+		ldr->skel->rodata->enforce = 1;
+		ldr->skel->rodata->unknown_block = opts->unknown_block;
+		ldr->skel->rodata->scope_id = opts->scope_id;
+		ldr->skel->rodata->scope_level = opts->scope_level;
+	}
 
 	if (skbouncer_bpf__load(ldr->skel)) {
 		fprintf(stderr, "skbouncer: failed to load BPF object: %s\n",
@@ -197,13 +203,27 @@ struct skb_loader *skb_loader_open(const struct skb_loader_opts *opts)
 		return NULL;
 	}
 
-	if (opts && opts->ifname &&
-	    attach_tc(ldr, opts->ifname, opts->direction) != 0) {
-		skb_loader_close(ldr);
-		return NULL;
-	}
-
 	return ldr;
+}
+
+int skb_loader_attach(struct skb_loader *ldr, const char *ifname,
+		      enum skb_direction dir)
+{
+	return attach_tc(ldr, ifname, dir);
+}
+
+int skb_loader_set_rule(struct skb_loader *ldr, uint32_t slot,
+			const struct skb_krule *rule)
+{
+	return bpf_map__update_elem(ldr->skel->maps.rules, &slot, sizeof(slot),
+				    rule, sizeof(*rule), BPF_ANY);
+}
+
+int skb_loader_set_cgroup(struct skb_loader *ldr, uint64_t cgroup_id,
+			  uint32_t slot)
+{
+	return bpf_map__update_elem(ldr->skel->maps.cgroup_rule, &cgroup_id,
+				    sizeof(cgroup_id), &slot, sizeof(slot), BPF_ANY);
 }
 
 int skb_loader_stats(const struct skb_loader *ldr, uint64_t *out, size_t n)

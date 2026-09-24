@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include "container.h"
+#include "enforce.h"
 #include "event.h"
 #include "loader.h"
 #include "policy.h"
@@ -48,16 +49,38 @@ static int catch_signal(int sig)
 struct run_state {
 	unsigned long events;
 	bool json;
+	bool enforce;
+	struct skb_loader *ldr;
 	struct skb_container_map *containers;
 	struct skb_policy *policy;	/* NULL: no verdicts */
 };
+
+static void sync_policy(struct run_state *st)
+{
+	int err = skb_enforce_sync(st->ldr, st->policy, st->containers);
+
+	if (err)
+		fprintf(stderr, "skbouncer: cannot update policy maps: %s\n",
+			strerror(-err));
+}
 
 static void on_event(void *ctx, const struct skb_event *ev)
 {
 	struct run_state *st = ctx;
 	const char *name = skb_container_lookup(st->containers, ev->cgroup_id);
-	const char *verdict = st->policy ?
-		skb_verdict_str(skb_policy_check(st->policy, ev, name)) : NULL;
+	enum skb_verdict v = st->policy ? skb_policy_check(st->policy, ev, name) : 0;
+	const char *verdict = st->policy ? skb_verdict_str(v) : NULL;
+
+	if (st->enforce) {
+		/* The lookup may have found a new container; the kernel decided
+		 * this one without it, so they can disagree once. */
+		if (v != ev->verdict)
+			fprintf(stderr, "skbouncer: kernel verdict %s, userspace %s "
+				"(cgroup %llu); container map was stale\n",
+				skb_verdict_str(ev->verdict), verdict,
+				(unsigned long long)ev->cgroup_id);
+		sync_policy(st);
+	}
 
 	if (st->json) {
 		st->events++;
@@ -65,7 +88,7 @@ static void on_event(void *ctx, const struct skb_event *ev)
 		return;
 	}
 	if (st->events++ == 0)
-		skb_event_header(stdout, verdict);
+		skb_event_header(stdout, verdict, st->enforce);
 	skb_event_print(stdout, ev, name, verdict);
 }
 
@@ -111,7 +134,9 @@ static void usage(FILE *out, const char *argv0)
 "  -v, --verbose         pass libbpf debug output through\n"
 "  -h, --help            this text\n"
 "\n"
-"enforce mode requires --cgroup and refuses the root cgroup.\n"
+"enforce mode drops violating ClientHellos in the kernel. It requires -p,\n"
+"a veth for -i, and --cgroup, which scopes blocking to that cgroup and its\n"
+"descendants. The root cgroup is refused.\n"
 "\n"
 "A bridged container's outbound traffic is INGRESS on the host side of its\n"
 "veth, and is still pre-NAT there. Watching one container therefore means\n"
@@ -216,6 +241,16 @@ static int parse_args(int argc, char **argv, struct options *opt)
 				opt->cgroup_path, why);
 			return -1;
 		}
+		if (!opt->policy_path) {
+			fprintf(stderr, "skbouncer: enforce mode requires a policy (-p)\n");
+			return -1;
+		}
+		/* The host's own traffic, SSH included, never crosses a veth. */
+		if (!opt->ifname || !skb_enforce_is_veth(opt->ifname)) {
+			fprintf(stderr, "skbouncer: enforce mode only attaches to a veth; "
+				"%s is not one\n", opt->ifname ? opt->ifname : "no -i given");
+			return -1;
+		}
 	} else if (opt->cgroup_path) {
 		const char *why = NULL;
 
@@ -235,6 +270,7 @@ int main(int argc, char **argv)
 	struct skb_loader_opts lopts;
 	struct skb_loader *ldr;
 	struct run_state state = {};
+	unsigned ticks = 0;
 
 	/* Off a tty stdout is block buffered and the poll loop then blocks, so
 	 * events would sit unflushed until exit. */
@@ -245,11 +281,7 @@ int main(int argc, char **argv)
 		return EXIT_FAILURE;
 	}
 	state.json = opt.json;
-
-	if (opt.mode == MODE_ENFORCE) {
-		fprintf(stderr, "skbouncer: enforce mode not implemented\n");
-		return EXIT_FAILURE;
-	}
+	state.enforce = opt.mode == MODE_ENFORCE;
 	/* Before anything is loaded: a bad policy must cost nothing. */
 	if (opt.policy_path) {
 		char errbuf[512];
@@ -265,9 +297,21 @@ int main(int argc, char **argv)
 		.ifname    = opt.ifname,
 		.direction = opt.direction,
 		.verbose   = opt.verbose,
+		.enforce   = state.enforce,
 		.on_event  = on_event,
 		.ctx       = &state,
 	};
+	if (state.enforce) {
+		char errbuf[512];
+
+		if (skb_enforce_scope(opt.cgroup_path, &lopts.scope_id,
+				      &lopts.scope_level, errbuf, sizeof(errbuf))) {
+			fprintf(stderr, "skbouncer: %s\n", errbuf);
+			skb_policy_free(state.policy);
+			return EXIT_FAILURE;
+		}
+		lopts.unknown_block = skb_policy_blocks_unknown(state.policy);
+	}
 
 	/* Warm the cache so the first events cost no round trip to dockerd.
 	 * Failure is not fatal: names are then null until dockerd answers. */
@@ -282,7 +326,17 @@ int main(int argc, char **argv)
 			"/var/run/docker.sock; container names unavailable\n");
 
 	ldr = skb_loader_open(&lopts);
-	if (!ldr) {
+	state.ldr = ldr;
+	if (!ldr)
+		goto fail;
+	/* The policy goes in before the attach: an empty map fails open. */
+	if (state.enforce && skb_enforce_sync(ldr, state.policy, state.containers)) {
+		fprintf(stderr, "skbouncer: cannot load policy into the kernel\n");
+		goto fail;
+	}
+	if (opt.ifname && skb_loader_attach(ldr, opt.ifname, opt.direction)) {
+fail:
+		skb_loader_close(ldr);
 		skb_container_map_free(state.containers);
 		skb_policy_free(state.policy);
 		return EXIT_FAILURE;
@@ -292,7 +346,8 @@ int main(int argc, char **argv)
 	       skb_loader_prog_id(ldr), skb_loader_prog_name(ldr));
 	printf("verify with: bpftool prog show id %u\n", skb_loader_prog_id(ldr));
 	if (opt.ifname)
-		printf("watching %s %s for TLS ClientHello; Ctrl-C to stop\n",
+		printf("%s %s %s for TLS ClientHello; Ctrl-C to stop\n",
+		       state.enforce ? "enforcing on" : "watching",
 		       opt.ifname, skb_direction_name(opt.direction));
 	else
 		printf("loaded but not attached (pass -i <dev>); Ctrl-C to unload\n");
@@ -307,6 +362,13 @@ int main(int argc, char **argv)
 
 	while (!exiting) {
 		int err = skb_loader_poll(ldr, 200 /* ms */);
+
+		/* A container started since the last look gets its rule
+		 * before its first ClientHello, not after. */
+		if (state.enforce && ++ticks % 5 == 0) {
+			skb_container_refresh(state.containers);
+			sync_policy(&state);
+		}
 
 		if (err == -EINTR)
 			break;

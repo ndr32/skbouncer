@@ -47,6 +47,7 @@ struct skb_container_map {
 	size_t n, cap;
 	uint64_t miss[MISS_SLOTS];	/* ring; 0 = empty slot */
 	unsigned miss_next;
+	unsigned gen;
 };
 
 struct skb_container_map *skb_container_map_new(void)
@@ -77,6 +78,11 @@ static int put(struct skb_container_map *m, uint64_t id, const char *name)
 
 	if (!dup)
 		return -ENOMEM;
+	if (e && strcmp(e->name, name) == 0) {
+		free(dup);
+		return 0;
+	}
+	m->gen++;
 	if (e) {		/* renamed */
 		free(e->name);
 		e->name = dup;
@@ -246,6 +252,19 @@ const char *skb_container_lookup(struct skb_container_map *m, uint64_t cgroup_id
 		return e->name;
 	m->miss[m->miss_next++ % MISS_SLOTS] = cgroup_id;
 	return NULL;
+}
+
+unsigned skb_container_generation(const struct skb_container_map *m)
+{
+	return m->gen;
+}
+
+void skb_container_foreach(const struct skb_container_map *m,
+			   void (*fn)(void *ctx, uint64_t cgroup_id, const char *name),
+			   void *ctx)
+{
+	for (size_t i = 0; i < m->n; i++)
+		fn(ctx, m->v[i].cgroup_id, m->v[i].name);
 }
 
 void skb_container_map_free(struct skb_container_map *m)

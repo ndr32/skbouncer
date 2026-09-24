@@ -33,8 +33,15 @@ static const char *trunc_name(uint8_t reason)
 /* The cgroup id, not the veth, identifies the container: containers sharing
  * a network namespace share one veth. It is 0 for anything forwarded,
  * which is every bridged container at a physical interface. */
-void skb_event_header(FILE *out, bool verdict)
+static const char *action_name(uint8_t a)
 {
+	return a == SKB_ACTION_BLOCK ? "block" : "pass";
+}
+
+void skb_event_header(FILE *out, bool verdict, bool action)
+{
+	if (action)
+		fprintf(out, "%-6s ", "ACTION");
 	if (verdict)
 		fprintf(out, "%-9s ", "VERDICT");
 	fprintf(out, "%-18s %-15s %-7s %-10s %-20s %-21s %-21s %6s %8s %-8s %-6s %7s %s\n",
@@ -62,6 +69,8 @@ void skb_event_print(FILE *out, const struct skb_event *ev, const char *containe
 	snprintf(dbuf, sizeof(dbuf), "%s:%u", ip4(dst, ev->tuple.daddr),
 		 ntohs(ev->tuple.dport));
 
+	if (ev->action)
+		fprintf(out, "%-6s ", action_name(ev->action));
 	if (verdict)
 		fprintf(out, "%-9s ", verdict);
 	/* __u64 is unsigned long long here, so PRIu64 ("lu") would not match. */
@@ -135,5 +144,7 @@ void skb_event_print_json(FILE *out, const struct skb_event *ev,
 		ev->seen & SKB_SEEN_VERSIONS ? "true" : "false");
 	if (verdict)
 		fprintf(out, ",\"verdict\":\"%s\"", verdict);
+	if (ev->action)
+		fprintf(out, ",\"action\":\"%s\"", action_name(ev->action));
 	fputs("}\n", out);
 }

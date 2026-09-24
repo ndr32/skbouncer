@@ -11,7 +11,7 @@
 const char *skb_direction_name(uint8_t dir);
 
 /* `verdict` NULL means no policy is loaded: the column or key is left out. */
-void skb_event_header(FILE *out, bool verdict);
+void skb_event_header(FILE *out, bool verdict, bool action);
 /* `container` is the name for ev->cgroup_id, or NULL if it is none. */
 void skb_event_print(FILE *out, const struct skb_event *ev, const char *container,
 		     const char *verdict);

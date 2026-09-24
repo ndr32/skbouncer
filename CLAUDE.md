@@ -95,8 +95,8 @@ OUT: decryption, IPv6 (connect4 is v4-only), Kubernetes / multi-host, Encrypted 
 - M4 - cgroup id -> Docker container name in userspace
 - M5 - JSON policy format + userspace policy check + audit mode
        (format and verdict semantics: policy/README.md)
-- M6 - enforce mode  <- CURRENT
-- M6.5 - CLI usability, before the questionnaire shows its output: `--container NAME`
+- M6 - enforce mode
+- M6.5 - CLI usability  <- CURRENT. Before the questionnaire shows its output: `--container NAME`
        resolves the veth (and the enforce cgroup); ingress by default for containers;
        a reason with each verdict; versions as 1.3/1.2 and cipher names; wall-clock time
        in text output; drop dev-only startup lines; `--version`. Not `--all-containers`.

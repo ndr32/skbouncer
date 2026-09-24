@@ -24,6 +24,7 @@ struct skb_rule {
 
 struct skb_policy {
 	bool default_allow;
+	bool unknown_block;
 	struct skb_rule *rules;
 	size_t n_rules;
 };
@@ -235,7 +236,7 @@ err:
 
 struct skb_policy *skb_policy_load(const char *path, char *errbuf, size_t errlen)
 {
-	static const char *const keys[] = { "version", "default", "rules", NULL };
+	static const char *const keys[] = { "version", "default", "on_unknown", "rules", NULL };
 	struct skb_policy *pol;
 	json_error_t jerr;
 	json_t *root, *v;
@@ -271,10 +272,23 @@ struct skb_policy *skb_policy_load(const char *path, char *errbuf, size_t errlen
 			FAIL("%s: \"default\" must be \"allow\" or \"deny\"", path);
 	}
 
+	/* Omitted means allow: never block on data not seen. */
+	v = json_object_get(root, "on_unknown");
+	if (v) {
+		const char *d = json_is_string(v) ? json_string_value(v) : "";
+
+		if (strcmp(d, "block") == 0)
+			pol->unknown_block = true;
+		else if (strcmp(d, "allow") != 0)
+			FAIL("%s: \"on_unknown\" must be \"allow\" or \"block\"", path);
+	}
+
 	v = json_object_get(root, "rules");
 	if (v) {
 		if (!json_is_array(v))
 			FAIL("%s: \"rules\" must be an array", path);
+		if (json_array_size(v) > SKB_MAX_RULES)
+			FAIL("%s: more than %d rules", path, SKB_MAX_RULES);
 		pol->rules = calloc(json_array_size(v) + 1, sizeof(*pol->rules));
 		if (!pol->rules)
 			FAIL("%s: out of memory", path);
@@ -365,6 +379,44 @@ enum skb_verdict skb_policy_check(const struct skb_policy *pol,
 	}
 
 	return partial ? SKB_VERDICT_UNKNOWN : SKB_VERDICT_ALLOW;
+}
+
+unsigned skb_policy_rule_slot(const struct skb_policy *pol, const char *container)
+{
+	const struct skb_rule *r = match(pol, container);
+
+	return r ? r - pol->rules + 1 : 0;
+}
+
+size_t skb_policy_n_rules(const struct skb_policy *pol)
+{
+	return pol->n_rules;
+}
+
+bool skb_policy_blocks_unknown(const struct skb_policy *pol)
+{
+	return pol->unknown_block;
+}
+
+/* Must decide exactly as skb_policy_check() does; the kernel mirrors it. */
+void skb_policy_compile(const struct skb_policy *pol, unsigned slot,
+			struct skb_krule *out)
+{
+	const struct skb_rule *r;
+
+	memset(out, 0, sizeof(*out));
+	out->flags = SKB_KRULE_VALID;
+	if (slot == 0 || slot > pol->n_rules) {
+		out->flags |= SKB_KRULE_FIXED;
+		out->fixed = pol->default_allow ? SKB_VERDICT_ALLOW : SKB_VERDICT_VIOLATION;
+		return;
+	}
+	r = &pol->rules[slot - 1];
+	out->min_version = r->min_version;
+	if (r->any_cipher)
+		out->flags |= SKB_KRULE_ANY_CIPHER;
+	for (size_t i = 0; i < r->n_ciphers; i++)
+		out->ciphers[r->ciphers[i] / 64] |= 1ULL << (r->ciphers[i] % 64);
 }
 
 const char *skb_verdict_str(enum skb_verdict v)
