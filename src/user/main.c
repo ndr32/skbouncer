@@ -21,9 +21,9 @@ enum run_mode {
 	MODE_ENFORCE,
 };
 
-
 struct options {
 	const char *container;
+	struct skb_container_info cinfo;	/* what --container resolved to */
 	const char *ifname;
 	const char *cgroup_path;
 	const char *policy_path;
@@ -300,14 +300,145 @@ static int check_args(struct options *opt)
 	return 0;
 }
 
+static int resolve_container(struct options *opt)
+{
+	char errbuf[512];
+
+	if (skb_container_resolve(opt->container, &opt->cinfo, errbuf, sizeof(errbuf))) {
+		fprintf(stderr, "skbouncer: %s\n", errbuf);
+		return -1;
+	}
+	opt->ifname = opt->cinfo.ifname;
+	if (!opt->cgroup_path)
+		opt->cgroup_path = opt->cinfo.cgroup;
+	return 0;
+}
+
+/* Loads the policy, then the program, fills the policy maps, and attaches.
+ * Whatever it managed to set up is left in `st` for teardown(). */
+static int setup(const struct options *opt, struct run_state *st)
+{
+	struct skb_loader_opts lopts = {
+		.ifname    = opt->ifname,
+		.direction = opt->direction,
+		.verbose   = opt->verbose,
+		.enforce   = st->enforce,
+		.on_event  = on_event,
+		.ctx       = st,
+	};
+	char errbuf[512];
+
+	/* Before anything is loaded: a bad policy must cost nothing. */
+	if (opt->policy_path &&
+	    !(st->policy = skb_policy_load(opt->policy_path, errbuf, sizeof(errbuf)))) {
+		fprintf(stderr, "skbouncer: %s\n", errbuf);
+		return -1;
+	}
+	if (st->enforce) {
+		if (skb_enforce_scope(opt->cgroup_path, &lopts.scope_id,
+				      &lopts.scope_level, errbuf, sizeof(errbuf))) {
+			fprintf(stderr, "skbouncer: %s\n", errbuf);
+			return -1;
+		}
+		lopts.unknown_block = skb_policy_blocks_unknown(st->policy);
+		st->scope = opt->cgroup_path;
+	}
+
+	/* Warm the cache so the first events cost no round trip to dockerd.
+	 * Failure is not fatal: names are then null until dockerd answers. */
+	if (!(st->containers = skb_container_map_new())) {
+		perror("skbouncer: container map");
+		return -1;
+	}
+	if (skb_container_refresh(st->containers) != 0)
+		fprintf(stderr, "skbouncer: cannot list containers via "
+			"/var/run/docker.sock; container names unavailable\n");
+
+	if (!(st->ldr = skb_loader_open(&lopts)))
+		return -1;
+	/* The policy goes in before the attach: an empty map fails open. */
+	if (st->enforce && skb_enforce_sync(st->ldr, st->policy, st->containers,
+					    st->scope)) {
+		fprintf(stderr, "skbouncer: cannot load policy into the kernel\n");
+		return -1;
+	}
+	if (opt->ifname && skb_loader_attach(st->ldr, opt->ifname, opt->direction))
+		return -1;
+	return 0;
+}
+
+static void announce(const struct options *opt, const struct run_state *st)
+{
+	const char *doing = st->enforce ? "enforcing on" : "watching";
+
+	if (opt->container)
+		fprintf(stderr, "skbouncer: %s container %s (%s %s); Ctrl-C to stop\n",
+			doing, opt->container, opt->ifname,
+			skb_direction_name(opt->direction));
+	else if (opt->ifname)
+		fprintf(stderr, "skbouncer: %s %s %s; Ctrl-C to stop\n", doing,
+			opt->ifname, skb_direction_name(opt->direction));
+	else
+		fprintf(stderr, "skbouncer: loaded but not attached (pass --container "
+			"or -i); Ctrl-C to unload\n");
+}
+
+/* SIGPIPE and SIGHUP too: a reader or a terminal that goes away is a reason
+ * to stop, and the counters are still worth reporting. */
+static int catch_signals(void)
+{
+	if (catch_signal(SIGINT) || catch_signal(SIGTERM) ||
+	    catch_signal(SIGHUP) || catch_signal(SIGPIPE)) {
+		perror("skbouncer: sigaction");
+		return -1;
+	}
+	return 0;
+}
+
+static int run(struct run_state *st)
+{
+	uint64_t next_sync = 0;
+
+	while (!exiting) {
+		int err = skb_loader_poll(st->ldr, 200 /* ms */);
+
+		/* A container started since the last look gets its rule
+		 * before its first ClientHello, not after. On a clock: a busy
+		 * ringbuf returns from poll() far more often than 200 ms. */
+		if (st->enforce && now_ms() >= next_sync) {
+			skb_container_refresh(st->containers);
+			sync_policy(st);
+			next_sync = now_ms() + 1000;
+		}
+		if (err == -EINTR)
+			break;
+		if (err < 0) {
+			fprintf(stderr, "skbouncer: ringbuf poll failed: %s\n",
+				strerror(-err));
+			return EXIT_FAILURE;
+		}
+	}
+
+	/* Anything the kernel submitted just before the signal is still in the
+	 * ringbuf; drain it so the delivered count can be compared with the
+	 * kernel's own tally. */
+	skb_loader_poll(st->ldr, 0);
+	report(st->ldr, st);
+	return EXIT_SUCCESS;
+}
+
+static void teardown(struct run_state *st)
+{
+	skb_loader_close(st->ldr);
+	skb_container_map_free(st->containers);
+	skb_policy_free(st->policy);
+}
+
 int main(int argc, char **argv)
 {
 	struct options opt = { .mode = MODE_AUDIT };
-	struct skb_loader_opts lopts;
-	struct skb_loader *ldr;
-	struct run_state state = {};
-	struct skb_container_info cinfo;
-	uint64_t next_sync = 0;
+	struct run_state st = {};
+	int rc = EXIT_FAILURE;
 
 	/* Off a tty stdout is block buffered and the poll loop then blocks, so
 	 * events would sit unflushed until exit. */
@@ -317,137 +448,17 @@ int main(int argc, char **argv)
 		fprintf(stderr, "run '%s --help' for usage\n", argv[0]);
 		return EXIT_FAILURE;
 	}
-	if (opt.container) {
-		char errbuf[512];
-
-		if (skb_container_resolve(opt.container, &cinfo, errbuf, sizeof(errbuf))) {
-			fprintf(stderr, "skbouncer: %s\n", errbuf);
-			return EXIT_FAILURE;
-		}
-		opt.ifname = cinfo.ifname;
-		if (!opt.cgroup_path)
-			opt.cgroup_path = cinfo.cgroup;
-	}
+	if (opt.container && resolve_container(&opt) != 0)
+		return EXIT_FAILURE;
 	if (check_args(&opt) != 0)
 		return EXIT_FAILURE;
-	state.json = opt.json;
-	state.enforce = opt.mode == MODE_ENFORCE;
-	/* Before anything is loaded: a bad policy must cost nothing. */
-	if (opt.policy_path) {
-		char errbuf[512];
 
-		state.policy = skb_policy_load(opt.policy_path, errbuf, sizeof(errbuf));
-		if (!state.policy) {
-			fprintf(stderr, "skbouncer: %s\n", errbuf);
-			return EXIT_FAILURE;
-		}
+	st.json = opt.json;
+	st.enforce = opt.mode == MODE_ENFORCE;
+	if (setup(&opt, &st) == 0 && catch_signals() == 0) {
+		announce(&opt, &st);
+		rc = run(&st);
 	}
-
-	lopts = (struct skb_loader_opts){
-		.ifname    = opt.ifname,
-		.direction = opt.direction,
-		.verbose   = opt.verbose,
-		.enforce   = state.enforce,
-		.on_event  = on_event,
-		.ctx       = &state,
-	};
-	if (state.enforce) {
-		char errbuf[512];
-
-		if (skb_enforce_scope(opt.cgroup_path, &lopts.scope_id,
-				      &lopts.scope_level, errbuf, sizeof(errbuf))) {
-			fprintf(stderr, "skbouncer: %s\n", errbuf);
-			skb_policy_free(state.policy);
-			return EXIT_FAILURE;
-		}
-		lopts.unknown_block = skb_policy_blocks_unknown(state.policy);
-		state.scope = opt.cgroup_path;
-	}
-
-	/* Warm the cache so the first events cost no round trip to dockerd.
-	 * Failure is not fatal: names are then null until dockerd answers. */
-	state.containers = skb_container_map_new();
-	if (!state.containers) {
-		perror("skbouncer: container map");
-		skb_policy_free(state.policy);
-		return EXIT_FAILURE;
-	}
-	if (skb_container_refresh(state.containers) != 0)
-		fprintf(stderr, "skbouncer: cannot list containers via "
-			"/var/run/docker.sock; container names unavailable\n");
-
-	ldr = skb_loader_open(&lopts);
-	state.ldr = ldr;
-	if (!ldr)
-		goto fail;
-	/* The policy goes in before the attach: an empty map fails open. */
-	if (state.enforce && skb_enforce_sync(ldr, state.policy, state.containers,
-					      state.scope)) {
-		fprintf(stderr, "skbouncer: cannot load policy into the kernel\n");
-		goto fail;
-	}
-	if (opt.ifname && skb_loader_attach(ldr, opt.ifname, opt.direction)) {
-fail:
-		skb_loader_close(ldr);
-		skb_container_map_free(state.containers);
-		skb_policy_free(state.policy);
-		return EXIT_FAILURE;
-	}
-
-	if (opt.container)
-		fprintf(stderr, "skbouncer: %s container %s (%s %s); Ctrl-C to stop\n",
-			state.enforce ? "enforcing on" : "watching", opt.container,
-			opt.ifname, skb_direction_name(opt.direction));
-	else if (opt.ifname)
-		fprintf(stderr, "skbouncer: %s %s %s; Ctrl-C to stop\n",
-			state.enforce ? "enforcing on" : "watching",
-			opt.ifname, skb_direction_name(opt.direction));
-	else
-		fprintf(stderr, "skbouncer: loaded but not attached (pass --container "
-			"or -i); Ctrl-C to unload\n");
-
-	/* SIGPIPE too: a reader that goes away is a reason to stop, and the
-	 * counters are still worth reporting. */
-	if (catch_signal(SIGINT) != 0 || catch_signal(SIGTERM) != 0 ||
-	    catch_signal(SIGHUP) != 0 || catch_signal(SIGPIPE) != 0) {
-		perror("skbouncer: sigaction");
-		skb_loader_close(ldr);
-		skb_container_map_free(state.containers);
-		skb_policy_free(state.policy);
-		return EXIT_FAILURE;
-	}
-
-	while (!exiting) {
-		int err = skb_loader_poll(ldr, 200 /* ms */);
-
-		/* A container started since the last look gets its rule
-		 * before its first ClientHello, not after. On a clock: a busy
-		 * ringbuf returns from poll() far more often than 200 ms. */
-		if (state.enforce && now_ms() >= next_sync) {
-			skb_container_refresh(state.containers);
-			sync_policy(&state);
-			next_sync = now_ms() + 1000;
-		}
-
-		if (err == -EINTR)
-			break;
-		if (err < 0) {
-			fprintf(stderr, "skbouncer: ringbuf poll failed: %s\n",
-				strerror(-err));
-			skb_loader_close(ldr);
-			skb_container_map_free(state.containers);
-			return EXIT_FAILURE;
-		}
-	}
-
-	/* Anything the kernel submitted just before the signal is still in the
-	 * ringbuf; drain it so the delivered count can be compared with the
-	 * kernel's own tally. */
-	skb_loader_poll(ldr, 0);
-	report(ldr, &state);
-
-	skb_loader_close(ldr);
-	skb_container_map_free(state.containers);
-	skb_policy_free(state.policy);
-	return EXIT_SUCCESS;
+	teardown(&st);
+	return rc;
 }
