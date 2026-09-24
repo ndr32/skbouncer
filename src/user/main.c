@@ -7,6 +7,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "container.h"
 #include "enforce.h"
@@ -57,11 +58,20 @@ struct run_state {
 	struct skb_loader *ldr;
 	struct skb_container_map *containers;
 	struct skb_policy *policy;	/* NULL: no verdicts */
+	const char *scope;		/* enforce mode's --cgroup */
 };
+
+static uint64_t now_ms(void)
+{
+	struct timespec ts;
+
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (uint64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
 
 static void sync_policy(struct run_state *st)
 {
-	int err = skb_enforce_sync(st->ldr, st->policy, st->containers);
+	int err = skb_enforce_sync(st->ldr, st->policy, st->containers, st->scope);
 
 	if (err)
 		fprintf(stderr, "skbouncer: cannot update policy maps: %s\n",
@@ -78,16 +88,14 @@ static void on_event(void *ctx, const struct skb_event *ev)
 	const char *verdict = st->policy ? skb_verdict_str(v) : NULL;
 	const char *reason = st->policy ? why : NULL;
 
-	if (st->enforce) {
-		/* The lookup may have found a new container; the kernel decided
-		 * this one without it, so they can disagree once. */
-		if (v != ev->verdict)
-			fprintf(stderr, "skbouncer: kernel verdict %s, userspace %s "
-				"(cgroup %llu); container map was stale\n",
-				skb_verdict_str(ev->verdict), verdict,
-				(unsigned long long)ev->cgroup_id);
-		sync_policy(st);
-	}
+	/* A cgroup created since the last sync reached the kernel without its
+	 * rule. Out of scope the kernel only knows the default, and says so
+	 * in kernel_verdict. */
+	if (st->enforce && v != ev->verdict && skb_enforce_in_scope(ev->cgroup_id))
+		fprintf(stderr, "skbouncer: kernel verdict %s, userspace %s "
+			"(cgroup %llu); policy map was stale\n",
+			skb_verdict_str(ev->verdict), verdict,
+			(unsigned long long)ev->cgroup_id);
 
 	if (st->json) {
 		st->events++;
@@ -116,9 +124,11 @@ static void report(const struct skb_loader *ldr, const struct run_state *st)
 	}
 
 	fprintf(stderr, "\nskbouncer: %llu ClientHello detected, %lu delivered, "
-		"%llu dropped (ringbuf full); unloading\n",
+		"%llu dropped (ringbuf full), %llu too short to classify; "
+		"unloading\n",
 		(unsigned long long)stat[SKB_STAT_DETECTED], st->events,
-		(unsigned long long)stat[SKB_STAT_DROPPED]);
+		(unsigned long long)stat[SKB_STAT_DROPPED],
+		(unsigned long long)stat[SKB_STAT_SHORT]);
 
 	/* Detected but neither delivered nor counted as dropped means the
 	 * loss is somewhere else, which would silently bias M7. */
@@ -307,7 +317,7 @@ int main(int argc, char **argv)
 	struct skb_loader *ldr;
 	struct run_state state = {};
 	struct skb_container_info cinfo;
-	unsigned ticks = 0;
+	uint64_t next_sync = 0;
 
 	/* Off a tty stdout is block buffered and the poll loop then blocks, so
 	 * events would sit unflushed until exit. */
@@ -361,6 +371,7 @@ int main(int argc, char **argv)
 			return EXIT_FAILURE;
 		}
 		lopts.unknown_block = skb_policy_blocks_unknown(state.policy);
+		state.scope = opt.cgroup_path;
 	}
 
 	/* Warm the cache so the first events cost no round trip to dockerd.
@@ -380,7 +391,8 @@ int main(int argc, char **argv)
 	if (!ldr)
 		goto fail;
 	/* The policy goes in before the attach: an empty map fails open. */
-	if (state.enforce && skb_enforce_sync(ldr, state.policy, state.containers)) {
+	if (state.enforce && skb_enforce_sync(ldr, state.policy, state.containers,
+					      state.scope)) {
 		fprintf(stderr, "skbouncer: cannot load policy into the kernel\n");
 		goto fail;
 	}
@@ -404,7 +416,10 @@ fail:
 		fprintf(stderr, "skbouncer: loaded but not attached (pass --container "
 			"or -i); Ctrl-C to unload\n");
 
-	if (catch_signal(SIGINT) != 0 || catch_signal(SIGTERM) != 0) {
+	/* SIGPIPE too: a reader that goes away is a reason to stop, and the
+	 * counters are still worth reporting. */
+	if (catch_signal(SIGINT) != 0 || catch_signal(SIGTERM) != 0 ||
+	    catch_signal(SIGHUP) != 0 || catch_signal(SIGPIPE) != 0) {
 		perror("skbouncer: sigaction");
 		skb_loader_close(ldr);
 		skb_container_map_free(state.containers);
@@ -416,10 +431,12 @@ fail:
 		int err = skb_loader_poll(ldr, 200 /* ms */);
 
 		/* A container started since the last look gets its rule
-		 * before its first ClientHello, not after. */
-		if (state.enforce && ++ticks % 5 == 0) {
+		 * before its first ClientHello, not after. On a clock: a busy
+		 * ringbuf returns from poll() far more often than 200 ms. */
+		if (state.enforce && now_ms() >= next_sync) {
 			skb_container_refresh(state.containers);
 			sync_policy(&state);
+			next_sync = now_ms() + 1000;
 		}
 
 		if (err == -EINTR)

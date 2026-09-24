@@ -199,8 +199,10 @@ void skb_event_print_json(FILE *out, const struct skb_event *ev,
 		fputs(",\"reason\":", out);
 		json_str(out, reason);
 	}
+	/* The kernel only judges in enforce mode, where action is set. */
 	if (ev->action)
-		fprintf(out, ",\"action\":\"%s\"", action_name(ev->action));
+		fprintf(out, ",\"action\":\"%s\",\"kernel_verdict\":\"%s\"",
+			action_name(ev->action), skb_verdict_str(ev->verdict));
 	/* ISO 8601 local time with a +hh:mm offset, which %z does not give. */
 	localtime_r(&ts.tv_sec, &tm);
 	strftime(stamp, sizeof(stamp), "%Y-%m-%dT%H:%M:%S", &tm);

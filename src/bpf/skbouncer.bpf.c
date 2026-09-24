@@ -5,8 +5,11 @@
 
 #include "skbouncer.h"
 
-#define TC_ACT_OK   0
-#define TC_ACT_SHOT 2
+/* tcx, not cls_bpf: the link dies with the process, so a killed skbouncer
+ * leaves nothing behind. Passing is TCX_NEXT rather than TCX_PASS, which
+ * would end the chain before any other instance on the hook runs. */
+#define SKB_PASS TCX_NEXT
+#define SKB_DROP TCX_DROP
 
 #define ETH_P_IP  0x0800
 #define ETH_HLEN  14
@@ -22,8 +25,15 @@
 #define TLS_SID_MAX        32
 #define TLS_EXT_SUPPORTED_VERSIONS 0x002b
 
-/* Record header plus the first byte of the handshake body. */
+/* The smallest ClientHello body: version, random, empty session_id, one
+ * cipher suite, one compression method, no extensions (RFC 8446 4.1.2). */
+#define TLS_HELLO_MIN (2 + TLS_RANDOM_LEN + 1 + 2 + 2 + 1 + 1)
+
+/* Record header plus the first byte of the handshake body: enough to call
+ * it a ClientHello. The rest of the handshake header and legacy_version are
+ * checked when the segment holds them. */
 #define TLS_SNIFF_LEN (TLS_RECORD_HLEN + 1)
+#define TLS_CHECK_LEN (TLS_RECORD_HLEN + TLS_HS_HLEN + 2)
 
 char LICENSE[] SEC("license") = "GPL";
 
@@ -119,10 +129,6 @@ static __always_inline __u8 walk_hello(struct __sk_buff *skb,
 		return SKB_TRUNC_PARSE;
 	n = ((__u32)b[1] << 16) | ((__u32)b[2] << 8) | b[3];
 	ev->handshake_len = n > 0xffff ? 0xffff : n;
-	/* A ClientHello split across records is legal but not walked. */
-	if (TLS_HS_HLEN + n < end - hs)
-		end = hs + TLS_HS_HLEN + n;
-
 	off = hs + TLS_HS_HLEN;
 	ev->legacy_version = load16(skb, off);
 	off += 2 + TLS_RANDOM_LEN;
@@ -273,12 +279,60 @@ static __always_inline __u8 check_policy(const struct skb_event *ev)
 	return partial ? SKB_VERDICT_UNKNOWN : SKB_VERDICT_ALLOW;
 }
 
-/* One program for both clsact hooks - the parse is direction-agnostic, and
+/* A record that cannot hold a ClientHello, whatever its first six bytes
+ * say. A segment in the middle of a stream can start with anything, and
+ * flow state would not help: a real ClientHello can follow plaintext
+ * (STARTTLS). `avail` is how many payload bytes this segment holds.
+ *
+ * The handshake length must be at least the record body: a ClientHello is
+ * the only thing the client sends before the server answers, so the record
+ * holds nothing else. It may be longer, when the ClientHello continues in
+ * the next record. */
+static __always_inline int not_a_hello(struct __sk_buff *skb, __u32 pay_off,
+				       __u32 avail, __u16 record_len)
+{
+	__u8 h[TLS_CHECK_LEN];
+	__u32 n;
+
+	if (avail >= TLS_CHECK_LEN) {
+		if (bpf_skb_load_bytes(skb, pay_off, h, TLS_CHECK_LEN) < 0)
+			return 1;
+		if (h[9] != 0x03)	/* legacy_version is 3.x */
+			return 1;
+	} else if (avail >= TLS_RECORD_HLEN + TLS_HS_HLEN) {
+		if (bpf_skb_load_bytes(skb, pay_off, h, TLS_RECORD_HLEN + TLS_HS_HLEN) < 0)
+			return 1;
+	} else {
+		return 0;
+	}
+	n = ((__u32)h[6] << 16) | ((__u32)h[7] << 8) | h[8];
+	return n < TLS_HELLO_MIN || TLS_HS_HLEN + n < record_len;
+}
+
+/* A segment of 1-5 bytes that starts like a handshake record: a ClientHello
+ * whose header was written on its own would look like this, and cannot be
+ * classified. Counted so the miss is visible. */
+static __always_inline void count_short(struct __sk_buff *skb, __u32 pay_off,
+					__u32 avail)
+{
+	__u8 b[2] = {};
+
+	if (avail == 0 || avail >= TLS_SNIFF_LEN)
+		return;
+	if (bpf_skb_load_bytes(skb, pay_off, b, 1) < 0 || b[0] != TLS_CT_HANDSHAKE)
+		return;
+	if (avail >= 2 && (bpf_skb_load_bytes(skb, pay_off + 1, b + 1, 1) < 0 ||
+			   b[1] != 0x03))
+		return;
+	bump(SKB_STAT_SHORT);
+}
+
+/* One program for both tcx hooks - the parse is direction-agnostic, and
  * a container's outbound handshake arrives on the INGRESS side of its veth.
  *
  * Name must stay <= 15 chars: BPF_OBJ_NAME_LEN is 16 incl. NUL, and a
  * longer name shows truncated in bpftool. */
-SEC("tc")
+SEC("tcx/ingress")	/* the loader switches it to egress */
 int skb_tc(struct __sk_buff *skb)
 {
 	void *data     = (void *)(long)skb->data;
@@ -297,31 +351,31 @@ int skb_tc(struct __sk_buff *skb)
 	 * direct access is safe here. The payload is not: tcp_sendmsg parks it
 	 * in page frags, hence bpf_skb_load_bytes() for the TLS bytes below. */
 	if ((void *)(eth + 1) > data_end)
-		return TC_ACT_OK;
+		return SKB_PASS;
 	if (eth->h_proto != bpf_htons(ETH_P_IP))
-		return TC_ACT_OK;
+		return SKB_PASS;
 
 	ip = data + ETH_HLEN;
 	if ((void *)(ip + 1) > data_end)
-		return TC_ACT_OK;
+		return SKB_PASS;
 	if (ip->protocol != IPPROTO_TCP)
-		return TC_ACT_OK;
+		return SKB_PASS;
 	/* Only the first fragment carries the TCP header. */
 	if (ip->frag_off & bpf_htons(IP_OFFMASK))
-		return TC_ACT_OK;
+		return SKB_PASS;
 	if (ip->ihl < 5)
-		return TC_ACT_OK;
+		return SKB_PASS;
 	l4_off = ETH_HLEN + (__u32)ip->ihl * 4;	/* <= 14 + 60 */
 
 	tcp = data + l4_off;
 	if ((void *)(tcp + 1) > data_end)
-		return TC_ACT_OK;
+		return SKB_PASS;
 	if (tcp->doff < 5)
-		return TC_ACT_OK;
+		return SKB_PASS;
 	pay_off = l4_off + (__u32)tcp->doff * 4;	/* <= 134 */
 
-	if (pay_off + TLS_SNIFF_LEN > skb->len)
-		return TC_ACT_OK;
+	if (pay_off >= skb->len)
+		return SKB_PASS;
 
 	/* Read the tuple before any helper call so the verifier keeps the
 	 * packet pointers valid. */
@@ -330,27 +384,8 @@ int skb_tc(struct __sk_buff *skb)
 	tuple.sport = tcp->source;
 	tuple.dport = tcp->dest;
 
-	if (bpf_skb_load_bytes(skb, pay_off, tls, sizeof(tls)) < 0)
-		return TC_ACT_OK;
-
-	/* Assumes the segment starts on a record boundary, which holds for the
-	 * first data segment of a connection - the only place a ClientHello
-	 * can appear. */
-	if (tls[0] != TLS_CT_HANDSHAKE)
-		return TC_ACT_OK;
-	if (tls[1] != 0x03)		/* record layer version is always 3.x */
-		return TC_ACT_OK;
-	if (tls[5] != TLS_HS_CLIENT_HELLO)
-		return TC_ACT_OK;
-
-	record_len = ((__u16)tls[3] << 8) | tls[4];
-	if (record_len < TLS_HS_HLEN || record_len > TLS_RECORD_MAX)
-		return TC_ACT_OK;
-
-	bump(SKB_STAT_DETECTED);
-
-	/* How much of the record body reaches the peer in the segment that
-	 * carries the record header.
+	/* How much of the record reaches the peer in the segment that
+	 * carries its header.
 	 *
 	 * tc egress runs BEFORE segmentation offload, so on a GSO skb
 	 * skb->len spans the whole super-packet rather than one wire segment
@@ -361,17 +396,40 @@ int skb_tc(struct __sk_buff *skb)
 	 *
 	 * The same holds at veth ingress: veth forwards GSO skbs whole, so the
 	 * container's super-packet is still unsegmented when it lands here and
-	 * gso_size carries the container's MSS.
-	 *
-	 * avail >= TLS_SNIFF_LEN on both paths - the length check above for
-	 * the unclamped one, the gso_size guard for the other - so body_len
-	 * is at least 1. skb->len can exceed 64 KiB, but the min() bounds the
-	 * result by record_len, itself <= TLS_RECORD_MAX, so __u16 holds. */
+	 * gso_size carries the container's MSS. */
 	avail = skb->len - pay_off;
 	seg_len = skb->gso_size;
 	if (seg_len >= TLS_SNIFF_LEN && seg_len < avail)
 		avail = seg_len;
 
+	if (avail < TLS_SNIFF_LEN) {
+		count_short(skb, pay_off, avail);
+		return SKB_PASS;
+	}
+	if (bpf_skb_load_bytes(skb, pay_off, tls, sizeof(tls)) < 0)
+		return SKB_PASS;
+
+	/* The segment is taken to start on a record boundary. A ClientHello
+	 * can appear later in a connection (STARTTLS), so any segment may
+	 * start one; not_a_hello() weeds out those that only look like it. */
+	if (tls[0] != TLS_CT_HANDSHAKE)
+		return SKB_PASS;
+	if (tls[1] != 0x03)		/* record layer version is always 3.x */
+		return SKB_PASS;
+	if (tls[5] != TLS_HS_CLIENT_HELLO)
+		return SKB_PASS;
+
+	record_len = ((__u16)tls[3] << 8) | tls[4];
+	if (record_len < TLS_HS_HLEN || record_len > TLS_RECORD_MAX)
+		return SKB_PASS;
+	if (not_a_hello(skb, pay_off, avail, record_len))
+		return SKB_PASS;
+
+	bump(SKB_STAT_DETECTED);
+
+	/* avail >= TLS_SNIFF_LEN, so body_len is at least 1. skb->len can
+	 * exceed 64 KiB, but the min() bounds the result by record_len,
+	 * itself <= TLS_RECORD_MAX, so __u16 holds. */
 	body_len = avail - TLS_RECORD_HLEN;
 	captured_len = body_len < record_len ? (__u16)body_len : record_len;
 
@@ -381,10 +439,10 @@ int skb_tc(struct __sk_buff *skb)
 
 		bump(SKB_STAT_DROPPED);
 		if (!enforce)
-			return TC_ACT_OK;
+			return SKB_PASS;
 		ev = bpf_map_lookup_elem(&scratch, &zero);
 		if (!ev)
-			return TC_ACT_OK;
+			return SKB_PASS;
 		reported = 0;
 	}
 	/* Reserved ringbuf memory is not zeroed, and the walk may stop before
@@ -411,8 +469,9 @@ int skb_tc(struct __sk_buff *skb)
 	else if (ev->trunc_reason == SKB_TRUNC_SEGMENT)
 		ev->trunc_reason = SKB_TRUNC_PARSE;
 
-	/* Out of scope still gets a verdict, so the event can say what
-	 * would have happened, but always passes. */
+	/* Out of scope still gets a verdict, but always passes. cgroup_rule
+	 * holds only in-scope cgroups, so there the verdict is the policy
+	 * default's. */
 	if (enforce) {
 		ev->verdict = check_policy(ev);
 		ev->action = SKB_ACTION_PASS;
@@ -421,7 +480,7 @@ int skb_tc(struct __sk_buff *skb)
 		     (ev->verdict == SKB_VERDICT_UNKNOWN && unknown_block)))
 			ev->action = SKB_ACTION_BLOCK;
 	}
-	act = ev->action == SKB_ACTION_BLOCK ? TC_ACT_SHOT : TC_ACT_OK;
+	act = ev->action == SKB_ACTION_BLOCK ? SKB_DROP : SKB_PASS;
 
 	if (reported)
 		bpf_ringbuf_submit(ev, 0);

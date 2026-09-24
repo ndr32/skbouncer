@@ -22,6 +22,7 @@
 enum skb_stat {
 	SKB_STAT_DETECTED = 0,	/* ClientHello matched */
 	SKB_STAT_DROPPED,	/* bpf_ringbuf_reserve() returned NULL */
+	SKB_STAT_SHORT,		/* 1-5 byte segment starting a handshake record: unclassifiable */
 	SKB_STAT__MAX,
 };
 

@@ -18,10 +18,15 @@ int skb_enforce_scope(const char *path, uint64_t *id, uint32_t *level,
 /* True if `ifname` is driven by veth, the only place enforce mode attaches. */
 bool skb_enforce_is_veth(const char *ifname);
 
-/* Writes every rule, then points each known container's cgroups at the rule
- * its name matches. Cheap to repeat; only does work when `containers` has
- * changed since the last call. Returns 0 or a negative errno. */
+/* Writes every rule on the first call. Then points each cgroup in `scope`,
+ * the --cgroup directory and those below it, at the rule its container
+ * matches, and removes every other cgroup from the kernel map: out of
+ * scope nothing is blocked, and a cgroup gone from the tree is gone for
+ * good. Returns 0 or a negative errno. */
 int skb_enforce_sync(struct skb_loader *ldr, const struct skb_policy *pol,
-		     struct skb_container_map *containers);
+		     struct skb_container_map *containers, const char *scope);
+
+/* Whether the last sync found this cgroup in scope. */
+bool skb_enforce_in_scope(uint64_t cgroup_id);
 
 #endif /* SKB_ENFORCE_H */

@@ -12,7 +12,7 @@ struct skb_loader;
 
 struct skb_loader_opts {
 	const char *ifname;	/* NULL loads without attaching */
-	enum skb_direction direction;	/* which clsact hook on that device */
+	enum skb_direction direction;	/* which tcx hook on that device */
 	bool verbose;
 
 	/* Enforce mode: block within the cgroup scope_id, at scope_level in
@@ -38,6 +38,10 @@ int skb_loader_set_rule(struct skb_loader *ldr, uint32_t slot,
 			const struct skb_krule *rule);
 int skb_loader_set_cgroup(struct skb_loader *ldr, uint64_t cgroup_id,
 			  uint32_t slot);
+int skb_loader_del_cgroup(struct skb_loader *ldr, uint64_t cgroup_id);
+/* Walks cgroup_rule's keys: prev NULL for the first. -ENOENT past the last. */
+int skb_loader_next_cgroup(struct skb_loader *ldr, const uint64_t *prev,
+			   uint64_t *next);
 uint32_t skb_loader_prog_id(const struct skb_loader *ldr);
 
 /* May be shorter than the C symbol: BPF_OBJ_NAME_LEN is 16 incl. NUL. */

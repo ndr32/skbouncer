@@ -2,6 +2,7 @@
 /* Enforce mode: the policy compiled into the kernel's maps. The verdict has
  * to be reached in the kernel, since one reached here arrives after the
  * ClientHello has left. */
+#include <dirent.h>
 #include <errno.h>
 #include <limits.h>
 #include <linux/ethtool.h>
@@ -20,6 +21,7 @@
 #include "enforce.h"
 
 #define CGROUP_ROOT "/sys/fs/cgroup"
+#define SCOPE_DEPTH 8	/* nested cgroups followed below the scope */
 
 int skb_enforce_scope(const char *path, uint64_t *id, uint32_t *level,
 		      char *errbuf, size_t errlen)
@@ -69,52 +71,100 @@ bool skb_enforce_is_veth(const char *ifname)
 	return err == 0 && strcmp(info.driver, "veth") == 0;
 }
 
-struct sync_ctx {
-	struct skb_loader *ldr;
-	const struct skb_policy *pol;
-	int err;
-};
+/* The cgroups the kernel can block: the scope and everything below it, as
+ * of the last sync. Sorted, for skb_enforce_in_scope(). */
+static uint64_t scope_ids[SKB_MAX_CGROUPS];
+static size_t n_scope;
 
-static void sync_one(void *arg, uint64_t cgroup_id, const char *name)
+static int cmp_u64(const void *a, const void *b)
 {
-	struct sync_ctx *c = arg;
-	int err = skb_loader_set_cgroup(c->ldr, cgroup_id,
-					skb_policy_rule_slot(c->pol, name));
+	uint64_t x = *(const uint64_t *)a, y = *(const uint64_t *)b;
 
-	if (err && !c->err)
-		c->err = err;
+	return x < y ? -1 : x > y;
+}
+
+static void walk_scope(const char *path, int depth)
+{
+	struct dirent *d;
+	struct stat st;
+	DIR *dir;
+
+	if (n_scope >= SKB_MAX_CGROUPS || stat(path, &st) != 0 ||
+	    !S_ISDIR(st.st_mode))
+		return;
+	scope_ids[n_scope++] = st.st_ino;
+	if (depth >= SCOPE_DEPTH || !(dir = opendir(path)))
+		return;
+	while ((d = readdir(dir))) {
+		char sub[PATH_MAX];
+
+		if (d->d_type != DT_DIR || d->d_name[0] == '.')
+			continue;
+		if (snprintf(sub, sizeof(sub), "%s/%s", path, d->d_name) <
+		    (int)sizeof(sub))
+			walk_scope(sub, depth + 1);
+	}
+	closedir(dir);
+}
+
+bool skb_enforce_in_scope(uint64_t cgroup_id)
+{
+	return bsearch(&cgroup_id, scope_ids, n_scope, sizeof(*scope_ids), cmp_u64);
+}
+
+static int load_rules(struct skb_loader *ldr, const struct skb_policy *pol)
+{
+	struct skb_krule *r = malloc(sizeof(*r));
+	int err = 0;
+
+	if (!r)
+		return -ENOMEM;
+	for (unsigned slot = 0; slot <= skb_policy_n_rules(pol) && !err; slot++) {
+		skb_policy_compile(pol, slot, r);
+		err = skb_loader_set_rule(ldr, slot, r);
+	}
+	free(r);
+	return err;
 }
 
 int skb_enforce_sync(struct skb_loader *ldr, const struct skb_policy *pol,
-		     struct skb_container_map *containers)
+		     struct skb_container_map *containers, const char *scope)
 {
 	static bool rules_done;
-	static unsigned synced_gen;
-	struct sync_ctx c = { ldr, pol, 0 };
-	unsigned gen = skb_container_generation(containers);
+	uint64_t key, *prev = NULL, *stale;
+	size_t n_stale = 0;
+	int err;
 
 	if (!rules_done) {
-		struct skb_krule *r = malloc(sizeof(*r));
-
-		if (!r)
-			return -ENOMEM;
-		for (unsigned slot = 0; slot <= skb_policy_n_rules(pol); slot++) {
-			int err;
-
-			skb_policy_compile(pol, slot, r);
-			err = skb_loader_set_rule(ldr, slot, r);
-			if (err) {
-				free(r);
-				return err;
-			}
-		}
-		free(r);
+		if ((err = load_rules(ldr, pol)))
+			return err;
 		rules_done = true;
-	} else if (gen == synced_gen) {
-		return 0;
 	}
-	skb_container_foreach(containers, sync_one, &c);
-	if (!c.err)
-		synced_gen = gen;
-	return c.err;
+
+	n_scope = 0;
+	walk_scope(scope, 0);
+	qsort(scope_ids, n_scope, sizeof(*scope_ids), cmp_u64);
+	for (size_t i = 0; i < n_scope; i++) {
+		const char *name = skb_container_lookup(containers, scope_ids[i]);
+
+		err = skb_loader_set_cgroup(ldr, scope_ids[i],
+					    skb_policy_rule_slot(pol, name));
+		if (err)
+			return err;
+	}
+
+	/* Collected first: deleting the key get_next_key started from would
+	 * restart the walk. */
+	if (!(stale = malloc(SKB_MAX_CGROUPS * sizeof(*stale))))
+		return -ENOMEM;
+	while (n_stale < SKB_MAX_CGROUPS &&
+	       skb_loader_next_cgroup(ldr, prev, &key) == 0) {
+		if (!skb_enforce_in_scope(key))
+			stale[n_stale++] = key;
+		prev = &key;
+	}
+	for (size_t i = 0; i < n_stale && !err; i++)
+		err = skb_loader_del_cgroup(ldr, stale[i]);
+	free(stale);
+	return err;
 }
