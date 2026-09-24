@@ -35,6 +35,11 @@
 #define TLS_SNIFF_LEN (TLS_RECORD_HLEN + 1)
 #define TLS_CHECK_LEN (TLS_RECORD_HLEN + TLS_HS_HLEN + 2)
 
+/* Payload offsets: record header, then the handshake header's uint24
+ * length, then legacy_version. */
+#define OFF_HS_LEN     (TLS_RECORD_HLEN + 1)
+#define OFF_LEGACY_VER (TLS_RECORD_HLEN + TLS_HS_HLEN)
+
 char LICENSE[] SEC("license") = "GPL";
 
 /* Set by the loader before load, from --direction: the program cannot ask
@@ -291,7 +296,7 @@ static __always_inline int not_a_hello(struct __sk_buff *skb, __u32 pay_off,
 	if (avail >= TLS_CHECK_LEN) {
 		if (bpf_skb_load_bytes(skb, pay_off, h, TLS_CHECK_LEN) < 0)
 			return 1;
-		if (h[9] != 0x03)	/* legacy_version is 3.x */
+		if (h[OFF_LEGACY_VER] != 0x03)	/* legacy_version is 3.x */
 			return 1;
 	} else if (avail >= TLS_RECORD_HLEN + TLS_HS_HLEN) {
 		if (bpf_skb_load_bytes(skb, pay_off, h, TLS_RECORD_HLEN + TLS_HS_HLEN) < 0)
@@ -299,7 +304,8 @@ static __always_inline int not_a_hello(struct __sk_buff *skb, __u32 pay_off,
 	} else {
 		return 0;
 	}
-	n = ((__u32)h[6] << 16) | ((__u32)h[7] << 8) | h[8];
+	n = ((__u32)h[OFF_HS_LEN] << 16) | ((__u32)h[OFF_HS_LEN + 1] << 8) |
+	    h[OFF_HS_LEN + 2];
 	return n < TLS_HELLO_MIN || TLS_HS_HLEN + n < record_len;
 }
 
