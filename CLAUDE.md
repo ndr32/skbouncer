@@ -101,6 +101,9 @@ OUT: decryption, IPv6 (connect4 is v4-only), Kubernetes / multi-host, Encrypted 
        resolves the veth (and the enforce cgroup); ingress by default for containers;
        a reason with each verdict; versions as 1.3/1.2 and cipher names; wall-clock time
        in text output; drop dev-only startup lines; `--version`. Not `--all-containers`.
+- M6.6 - hardening from the whole-codebase review: tcx links (no orphaned filters,
+       instances coexist), structural ClientHello checks, scoped cgroup_rule, kernel
+       verdict only in scope. Tagged beta2.
 - M7 - evaluation harness (parse accuracy, fragmentation coverage, runtime cost)  <- CURRENT
 
 Build each milestone so it loads and runs before starting the next.
