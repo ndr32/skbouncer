@@ -34,7 +34,7 @@ endif
 # Recorded with every result set, so it names the exact commit.
 VERSION := $(shell git describe --always --dirty 2>/dev/null || echo unknown)
 
-CFLAGS  := -g -O2 -Wall -Wextra -Wno-unused-parameter -DSKB_VERSION='"$(VERSION)"'
+CFLAGS  := -g -O2 -Wall -Wextra -Wno-unused-parameter
 LDLIBS  := -lbpf -lelf -lz $(JANSSON_LIBS)
 
 # -Wno-missing-declarations: vmlinux.h emits bare forward declarations for
@@ -54,6 +54,14 @@ $(BPF_OBJ): $(BPF_SRC) src/bpf/vmlinux.h include/skbouncer.h | $(BUILD)
 $(SKEL): $(BPF_OBJ)
 	$(BPFTOOL) gen skeleton $< > $@
 
+# Checked on every build, rewritten only when the version changes: a new commit
+# rebuilds main.o, and an unchanged tree rebuilds nothing.
+$(BUILD)/version.h: FORCE | $(BUILD)
+	@v='#define SKB_VERSION "$(VERSION)"'; \
+	[ "$$(cat $@ 2>/dev/null)" = "$$v" ] || echo "$$v" >$@
+
+$(BUILD)/main.o: $(BUILD)/version.h
+
 $(BUILD)/%.o: src/user/%.c $(SKEL) | $(BUILD)
 	$(CLANG) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
@@ -68,5 +76,6 @@ verify: $(BIN)
 	@echo "run in one window:   sudo ./$(BIN)"
 	@echo "then in another:     sudo bpftool prog show name skb_tc"
 
-.PHONY: all clean verify
+.PHONY: all clean verify FORCE
+FORCE:
 .DELETE_ON_ERROR:

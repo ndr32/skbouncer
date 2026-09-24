@@ -13,15 +13,13 @@
 #include "event.h"
 #include "loader.h"
 #include "policy.h"
+#include "version.h"
 
 enum run_mode {
 	MODE_AUDIT = 0,
 	MODE_ENFORCE,
 };
 
-#ifndef SKB_VERSION
-#define SKB_VERSION "unknown"
-#endif
 
 struct options {
 	const char *container;
