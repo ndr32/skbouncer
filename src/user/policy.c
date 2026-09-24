@@ -337,27 +337,61 @@ static bool cipher_permitted(const struct skb_rule *r, uint16_t c)
 	return false;
 }
 
+const char *skb_cipher_name(uint16_t id)
+{
+	for (size_t i = 0; i < sizeof(cipher_names) / sizeof(cipher_names[0]); i++)
+		if (cipher_names[i].id == id)
+			return cipher_names[i].name;
+	return NULL;
+}
+
+bool skb_cipher_ignored(uint16_t id)
+{
+	return cipher_ignored(id);
+}
+
+const char *skb_version_name(uint16_t v, char buf[8])
+{
+	if (v >= 0x0301 && v <= 0x0304)
+		snprintf(buf, 8, "1.%u", v - 0x0301);
+	else
+		snprintf(buf, 8, "0x%04x", v);
+	return buf;
+}
+
+#define WHY(...) do { if (why) snprintf(why, len, __VA_ARGS__); } while (0)
+
 /* Something seen breaks the rule: violation, however much is unseen.
  * Nothing seen does, but a constrained list is partial: unknown. */
-enum skb_verdict skb_policy_check(const struct skb_policy *pol,
-				  const struct skb_event *ev,
-				  const char *container)
+enum skb_verdict skb_policy_explain(const struct skb_policy *pol,
+				    const struct skb_event *ev,
+				    const char *container, char *why, size_t len)
 {
 	const struct skb_rule *r = match(pol, container);
-	bool partial = false;
+	bool part_c = false, part_v = false;
+	uint16_t low = 0, bad = 0;
+	unsigned n_bad = 0;
+	char vb[2][8], cb[8];
+	size_t n = 0;
 
-	if (!r)
+	if (!r) {
+		if (container)
+			WHY("no rule for %s; default %s", container,
+			    pol->default_allow ? "allow" : "deny");
+		else
+			WHY("not a known container; default %s",
+			    pol->default_allow ? "allow" : "deny");
 		return pol->default_allow ? SKB_VERDICT_ALLOW : SKB_VERDICT_VIOLATION;
+	}
 
 	if (!r->any_cipher) {
 		for (unsigned i = 0; i < ev->n_ciphers && i < SKB_MAX_CIPHERS; i++) {
 			uint16_t c = ntohs(ev->ciphers[i]);
 
-			if (!cipher_ignored(c) && !cipher_permitted(r, c))
-				return SKB_VERDICT_VIOLATION;
+			if (!cipher_ignored(c) && !cipher_permitted(r, c) && !n_bad++)
+				bad = c;
 		}
-		if (!(ev->seen & SKB_SEEN_CIPHERS))
-			partial = true;
+		part_c = !(ev->seen & SKB_SEEN_CIPHERS);
 	}
 
 	if (r->min_version) {
@@ -367,18 +401,50 @@ enum skb_verdict skb_policy_check(const struct skb_policy *pol,
 			for (unsigned i = 0; i < ev->n_versions && i < SKB_MAX_VERSIONS; i++) {
 				uint16_t v = ntohs(ev->versions[i]);
 
-				if (!is_grease(v) && v < r->min_version)
-					return SKB_VERDICT_VIOLATION;
+				if (!is_grease(v) && v < r->min_version && (!low || v < low))
+					low = v;
 			}
-		} else if (ev->seen & SKB_SEEN_VERSIONS) {
-			if (ev->legacy_version < r->min_version)
-				return SKB_VERDICT_VIOLATION;
+		} else if ((ev->seen & SKB_SEEN_VERSIONS) &&
+			   ev->legacy_version < r->min_version) {
+			low = ev->legacy_version;
 		}
-		if (!(ev->seen & SKB_SEEN_VERSIONS))
-			partial = true;
+		part_v = !(ev->seen & SKB_SEEN_VERSIONS);
 	}
 
-	return partial ? SKB_VERDICT_UNKNOWN : SKB_VERDICT_ALLOW;
+	/* Every broken limit is named, so fixing one does not reveal another. */
+	if (low || n_bad) {
+		if (why && low)
+			n += snprintf(why, len, "offers TLS %s, minimum is %s",
+				      skb_version_name(low, vb[0]),
+				      skb_version_name(r->min_version, vb[1]));
+		if (why && n_bad && n < len) {
+			const char *name = skb_cipher_name(bad);
+
+			if (!name)
+				snprintf(cb, sizeof(cb), "0x%04x", bad);
+			n += snprintf(why + n, len - n, "%soffers %s%s, not permitted",
+				      n ? "; " : "", name ? name : cb,
+				      n_bad > 1 ? " and others" : "");
+		}
+		return SKB_VERDICT_VIOLATION;
+	}
+
+	if (part_c || part_v) {
+		WHY("%s not seen in full%s",
+		    part_c && part_v ? "ciphers and versions" : part_c ? "ciphers" : "versions",
+		    ev->trunc_reason == SKB_TRUNC_SEGMENT ? " (ClientHello split across segments)" :
+		    ev->ciphers_capped ? " (more than 64 ciphers)" : "");
+		return SKB_VERDICT_UNKNOWN;
+	}
+	WHY("complies with rule %s", r->container);
+	return SKB_VERDICT_ALLOW;
+}
+
+enum skb_verdict skb_policy_check(const struct skb_policy *pol,
+				  const struct skb_event *ev,
+				  const char *container)
+{
+	return skb_policy_explain(pol, ev, container, NULL, 0);
 }
 
 unsigned skb_policy_rule_slot(const struct skb_policy *pol, const char *container)

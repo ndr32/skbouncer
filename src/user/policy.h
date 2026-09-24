@@ -17,6 +17,18 @@ enum skb_verdict skb_policy_check(const struct skb_policy *pol,
 				  const struct skb_event *ev,
 				  const char *container);
 
+/* As skb_policy_check(), and says why in `why` (may be NULL). */
+enum skb_verdict skb_policy_explain(const struct skb_policy *pol,
+				    const struct skb_event *ev,
+				    const char *container, char *why, size_t len);
+
+/* IANA name, or NULL if not in the table. */
+const char *skb_cipher_name(uint16_t id);
+/* GREASE and the two SCSVs: not real offers. */
+bool skb_cipher_ignored(uint16_t id);
+/* "1.0".."1.3", else "0x...." */
+const char *skb_version_name(uint16_t v, char buf[8]);
+
 /* Enforce mode: the rule `container` matches, as an index into the kernel's
  * rule map (0 = none matched, i.e. the default), and that rule compiled. */
 unsigned skb_policy_rule_slot(const struct skb_policy *pol, const char *container);

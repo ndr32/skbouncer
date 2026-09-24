@@ -2,8 +2,11 @@
 #include <arpa/inet.h>
 #include <net/if.h>
 #include <stdint.h>
+#include <string.h>
+#include <time.h>
 
 #include "event.h"
+#include "policy.h"
 
 /* inet_ntop() into a caller slot: two calls per line need two buffers. */
 static const char *ip4(char buf[INET_ADDRSTRLEN], uint32_t be_addr)
@@ -30,61 +33,106 @@ static const char *trunc_name(uint8_t reason)
 	}
 }
 
-/* The cgroup id, not the veth, identifies the container: containers sharing
- * a network namespace share one veth. It is 0 for anything forwarded,
- * which is every bridged container at a physical interface. */
 static const char *action_name(uint8_t a)
 {
 	return a == SKB_ACTION_BLOCK ? "block" : "pass";
 }
 
+/* ktime_ns is CLOCK_MONOTONIC; shift it by the clocks' current offset. */
+static struct timespec wall_time(uint64_t ktime_ns)
+{
+	struct timespec mono, real;
+	int64_t ns;
+
+	clock_gettime(CLOCK_MONOTONIC, &mono);
+	clock_gettime(CLOCK_REALTIME, &real);
+	ns = (int64_t)real.tv_sec * 1000000000LL + real.tv_nsec -
+	     ((int64_t)mono.tv_sec * 1000000000LL + mono.tv_nsec) + (int64_t)ktime_ns;
+	return (struct timespec){ ns / 1000000000LL, ns % 1000000000LL };
+}
+
 void skb_event_header(FILE *out, bool verdict, bool action)
 {
+	fprintf(out, "%-8s ", "TIME");
 	if (action)
 		fprintf(out, "%-6s ", "ACTION");
 	if (verdict)
 		fprintf(out, "%-9s ", "VERDICT");
-	fprintf(out, "%-18s %-15s %-7s %-10s %-20s %-21s %-21s %6s %8s %-8s %-6s %7s %s\n",
-		"TIME(mono)", "IFACE", "DIR", "CGROUP", "CONTAINER", "SOURCE", "DEST",
-		"RECORD", "CAPTURED", "TRUNC", "LEGACY", "CIPHERS", "VERSIONS");
+	fprintf(out, "%-20s %-21s %-21s %-8s %-9s %-44s%s\n",
+		"CONTAINER", "SOURCE", "DEST", "TLS", "BYTES", "CIPHERS",
+		verdict ? " REASON" : "");
 }
 
+/* The cgroup id, not the veth, identifies the container: containers sharing
+ * a network namespace share one veth. It is 0 for anything forwarded,
+ * which is every bridged container at a physical interface. */
 void skb_event_print(FILE *out, const struct skb_event *ev, const char *container,
-		     const char *verdict)
+		     const char *verdict, const char *reason)
 {
 	char src[INET_ADDRSTRLEN], dst[INET_ADDRSTRLEN];
 	char sbuf[INET_ADDRSTRLEN + 8], dbuf[INET_ADDRSTRLEN + 8];
-	char ifname[IF_NAMESIZE + 12];
-	char dev[IF_NAMESIZE];
+	char who[32], tls[32] = "", bytes[24], ciphers[80] = "", vb[8];
+	struct timespec ts = wall_time(ev->ktime_ns);
+	unsigned shown = 0, rest = 0;
+	struct tm tm;
+	size_t n = 0;
 
-	/* The device may be gone by the time we print - a container that has
-	 * already exited takes its veth with it. Fall back to the index. */
-	if (if_indextoname(ev->ifindex, dev))
-		snprintf(ifname, sizeof(ifname), "%s", dev);
+	localtime_r(&ts.tv_sec, &tm);
+	if (container)
+		snprintf(who, sizeof(who), "%s", container);
 	else
-		snprintf(ifname, sizeof(ifname), "if%u", ev->ifindex);
-
+		snprintf(who, sizeof(who), "cgroup %llu", (unsigned long long)ev->cgroup_id);
 	snprintf(sbuf, sizeof(sbuf), "%s:%u", ip4(src, ev->tuple.saddr),
 		 ntohs(ev->tuple.sport));
 	snprintf(dbuf, sizeof(dbuf), "%s:%u", ip4(dst, ev->tuple.daddr),
 		 ntohs(ev->tuple.dport));
 
+	for (unsigned i = 0; i < ev->n_versions && i < SKB_MAX_VERSIONS; i++) {
+		uint16_t v = ntohs(ev->versions[i]);
+
+		if ((v & 0x0f0f) != 0x0a0a && n < sizeof(tls))
+			n += snprintf(tls + n, sizeof(tls) - n, "%s%s", n ? "," : "",
+				      skb_version_name(v, vb));
+	}
+	if (!n)
+		snprintf(tls, sizeof(tls), "%s", ev->seen & SKB_SEEN_VERSIONS ?
+			 skb_version_name(ev->legacy_version, vb) : "?");
+
+	if (ev->captured_len < ev->record_len)
+		snprintf(bytes, sizeof(bytes), "%u/%u", ev->captured_len, ev->record_len);
+	else
+		snprintf(bytes, sizeof(bytes), "%u", ev->record_len);
+
+	/* The first real offer by name, then a count: a full list would not
+	 * fit on a line. */
+	for (unsigned i = 0; i < ev->n_ciphers && i < SKB_MAX_CIPHERS; i++) {
+		uint16_t c = ntohs(ev->ciphers[i]);
+		const char *name;
+
+		if (skb_cipher_ignored(c))
+			continue;
+		if (shown++) {
+			rest++;
+			continue;
+		}
+		if ((name = skb_cipher_name(c)))
+			snprintf(ciphers, sizeof(ciphers), "%s", name);
+		else
+			snprintf(ciphers, sizeof(ciphers), "0x%04x", c);
+	}
+	if (!shown)
+		snprintf(ciphers, sizeof(ciphers), "-");
+	if (rest || ev->ciphers_capped)
+		snprintf(ciphers + strlen(ciphers), sizeof(ciphers) - strlen(ciphers),
+			 " +%u%s", rest, ev->ciphers_capped ? "+" : "");
+
+	fprintf(out, "%02d:%02d:%02d ", tm.tm_hour, tm.tm_min, tm.tm_sec);
 	if (ev->action)
 		fprintf(out, "%-6s ", action_name(ev->action));
 	if (verdict)
 		fprintf(out, "%-9s ", verdict);
-	/* __u64 is unsigned long long here, so PRIu64 ("lu") would not match. */
-	fprintf(out, "%6llu.%09llu %-15s %-7s %-10llu %-20s %-21s %-21s %6u %8u %-8s %04x %6u%s ",
-		(unsigned long long)(ev->ktime_ns / 1000000000ULL),
-		(unsigned long long)(ev->ktime_ns % 1000000000ULL),
-		ifname, skb_direction_name(ev->direction),
-		(unsigned long long)ev->cgroup_id, container ? container : "-",
-		sbuf, dbuf, ev->record_len, ev->captured_len,
-		trunc_name(ev->trunc_reason), ev->legacy_version,
-		ev->n_ciphers, ev->ciphers_capped ? "+" : " ");
-	for (unsigned i = 0; i < ev->n_versions && i < SKB_MAX_VERSIONS; i++)
-		fprintf(out, "%s%04x", i ? "," : "", ntohs(ev->versions[i]));
-	fprintf(out, "%s\n", ev->n_versions ? "" : "-");
+	fprintf(out, "%-20s %-21s %-21s %-8s %-9s %-44s%s%s\n", who, sbuf, dbuf,
+		tls, bytes, ciphers, reason ? " " : "", reason ? reason : "");
 }
 
 static void u16_array(FILE *out, const __u16 *v, unsigned n, unsigned max)
@@ -117,9 +165,12 @@ static void json_str(FILE *out, const char *s)
 }
 
 void skb_event_print_json(FILE *out, const struct skb_event *ev,
-			  const char *container, const char *verdict)
+			  const char *container, const char *verdict, const char *reason)
 {
 	char src[INET_ADDRSTRLEN], dst[INET_ADDRSTRLEN];
+	struct timespec ts = wall_time(ev->ktime_ns);
+	char stamp[64], zone[8];
+	struct tm tm;
 
 	fprintf(out, "{\"ktime_ns\":%llu,\"ifindex\":%u,\"direction\":\"%s\","
 		"\"cgroup_id\":%llu,\"container\":",
@@ -144,7 +195,16 @@ void skb_event_print_json(FILE *out, const struct skb_event *ev,
 		ev->seen & SKB_SEEN_VERSIONS ? "true" : "false");
 	if (verdict)
 		fprintf(out, ",\"verdict\":\"%s\"", verdict);
+	if (reason) {
+		fputs(",\"reason\":", out);
+		json_str(out, reason);
+	}
 	if (ev->action)
 		fprintf(out, ",\"action\":\"%s\"", action_name(ev->action));
-	fputs("}\n", out);
+	/* ISO 8601 local time with a +hh:mm offset, which %z does not give. */
+	localtime_r(&ts.tv_sec, &tm);
+	strftime(stamp, sizeof(stamp), "%Y-%m-%dT%H:%M:%S", &tm);
+	strftime(zone, sizeof(zone), "%z", &tm);
+	fprintf(out, ",\"time\":\"%s.%06ld%.3s:%.2s\"}\n", stamp,
+		ts.tv_nsec / 1000, zone, zone + 3);
 }
