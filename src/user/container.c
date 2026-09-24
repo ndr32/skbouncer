@@ -127,18 +127,6 @@ static void put_tree(struct skb_container_map *m, const char *path,
 	closedir(dir);
 }
 
-/* systemd driver first (what this host uses), then cgroupfs. */
-static void put_container(struct skb_container_map *m, const char *id,
-			  const char *name)
-{
-	char path[512];
-
-	snprintf(path, sizeof(path), CGROUP_ROOT "/system.slice/docker-%s.scope", id);
-	put_tree(m, path, name, 0);
-	snprintf(path, sizeof(path), CGROUP_ROOT "/docker/%s", id);
-	put_tree(m, path, name, 0);
-}
-
 /* HTTP/1.0 so dockerd neither chunks the body nor keeps the connection:
  * the body simply runs to EOF. The timeouts bound how long a wedged dockerd
  * can stall the event loop. */
@@ -194,37 +182,65 @@ fail:
 	return NULL;
 }
 
+#ifdef HAVE_JANSSON
+/* GET `path` from dockerd. Returns the parsed body on a 200, else NULL, with
+ * *status the HTTP status, or 0 when dockerd gave no parsable answer. */
+static json_t *docker_json(const char *path, int *status)
+{
+	size_t len;
+	char *resp = docker_get(path, &len);
+	char *body;
+	json_t *root = NULL;
+
+	*status = 0;
+	if (!resp)
+		return NULL;
+	if (len > 12 && strncmp(resp, "HTTP/1.", 7) == 0 && resp[8] == ' ')
+		*status = atoi(resp + 9);
+	body = strstr(resp, "\r\n\r\n");
+	if (*status == 200 && body)
+		root = json_loads(body + 4, 0, NULL);
+	free(resp);
+	return root;
+}
+
+/* The container's cgroup directory: the systemd driver (this host), then
+ * cgroupfs. An id with a / would escape CGROUP_ROOT. */
+static int cgroup_of(const char *id, char *path, size_t len)
+{
+	struct stat st;
+
+	if (strchr(id, '/'))
+		return -1;
+	snprintf(path, len, CGROUP_ROOT "/system.slice/docker-%s.scope", id);
+	if (stat(path, &st) == 0)
+		return 0;
+	snprintf(path, len, CGROUP_ROOT "/docker/%s", id);
+	return stat(path, &st) == 0 ? 0 : -1;
+}
+#endif
+
 int skb_container_refresh(struct skb_container_map *m)
 {
 #ifdef HAVE_JANSSON
-	size_t len;
-	char *resp = docker_get("/containers/json?all=1", &len);
-	char *body;
 	json_t *root, *c;
+	int status;
 	size_t i;
 
-	if (!resp)
-		return -EIO;
-	body = strstr(resp, "\r\n\r\n");
-	if (strncmp(resp, "HTTP/1.", 7) != 0 || strncmp(resp + 8, " 200", 4) != 0 ||
-	    !body) {
-		free(resp);
-		return -EPROTO;
-	}
-	root = json_loads(body + 4, 0, NULL);
-	free(resp);
+	root = docker_json("/containers/json?all=1", &status);
 	if (!json_is_array(root)) {
 		json_decref(root);
-		return -EPROTO;
+		return status ? -EPROTO : -EIO;
 	}
 	json_array_foreach(root, i, c) {
 		const char *id = json_string_value(json_object_get(c, "Id"));
 		const char *name = json_string_value(
 			json_array_get(json_object_get(c, "Names"), 0));
+		char path[512];
 
-		if (!id || !name || strchr(id, '/'))
+		if (!id || !name || cgroup_of(id, path, sizeof(path)))
 			continue;
-		put_container(m, id, name[0] == '/' ? name + 1 : name);
+		put_tree(m, path, name[0] == '/' ? name + 1 : name, 0);
 	}
 	json_decref(root);
 	return 0;
@@ -286,12 +302,9 @@ int skb_container_resolve(const char *name, struct skb_container_info *out,
 			  char *errbuf, size_t errlen)
 {
 	char req[512], why[256];
-	const char *id, *body;
-	json_t *root = NULL;
-	struct stat st;
-	size_t len;
-	char *resp;
-	int pid, err = -ENOENT;
+	const char *id;
+	json_t *root;
+	int status, pid, err = 0;
 
 	/* A name with / or ? would turn into a different API path. */
 	if (!*name || strpbrk(name, "/?#% ")) {
@@ -299,50 +312,33 @@ int skb_container_resolve(const char *name, struct skb_container_info *out,
 		return -ENOENT;
 	}
 	snprintf(req, sizeof(req), "/containers/%s/json", name);
-	if (!(resp = docker_get(req, &len))) {
-		snprintf(errbuf, errlen, "cannot ask dockerd about container %s via "
-			 DOCKER_SOCK, name);
-		return -EIO;
+	if (!(root = docker_json(req, &status))) {
+		if (status == 404)
+			snprintf(errbuf, errlen, "no such container: %s", name);
+		else if (status)
+			snprintf(errbuf, errlen, "dockerd gave no usable answer for container %s",
+				 name);
+		else
+			snprintf(errbuf, errlen, "cannot ask dockerd about container %s via "
+				 DOCKER_SOCK, name);
+		return status == 404 ? -ENOENT : status ? -EPROTO : -EIO;
 	}
-	body = strstr(resp, "\r\n\r\n");
-	if (strncmp(resp, "HTTP/1.", 7) == 0 && strncmp(resp + 8, " 404", 4) == 0) {
-		snprintf(errbuf, errlen, "no such container: %s", name);
-		goto out;
-	}
-	if (strncmp(resp, "HTTP/1.", 7) != 0 || strncmp(resp + 8, " 200", 4) != 0 ||
-	    !body || !(root = json_loads(body + 4, 0, NULL))) {
-		snprintf(errbuf, errlen, "dockerd gave no usable answer for container %s", name);
-		err = -EPROTO;
-		goto out;
-	}
+
 	id = json_string_value(json_object_get(root, "Id"));
 	pid = json_integer_value(json_object_get(json_object_get(root, "State"), "Pid"));
-	if (!id || strchr(id, '/')) {
+	if (!id) {
 		snprintf(errbuf, errlen, "dockerd gave no id for container %s", name);
 		err = -EPROTO;
-		goto out;
-	}
-	if (pid <= 0) {
+	} else if (pid <= 0) {
 		snprintf(errbuf, errlen, "container %s is not running", name);
-		goto out;
-	}
-	if ((err = host_veth(pid, out->ifname, why, sizeof(why)))) {
+		err = -ENOENT;
+	} else if ((err = host_veth(pid, out->ifname, why, sizeof(why)))) {
 		snprintf(errbuf, errlen, "container %s %s", name, why);
-		goto out;
-	}
-	snprintf(out->cgroup, sizeof(out->cgroup),
-		 CGROUP_ROOT "/system.slice/docker-%s.scope", id);
-	if (stat(out->cgroup, &st) != 0)
-		snprintf(out->cgroup, sizeof(out->cgroup), CGROUP_ROOT "/docker/%s", id);
-	if (stat(out->cgroup, &st) != 0) {
+	} else if (cgroup_of(id, out->cgroup, sizeof(out->cgroup))) {
 		snprintf(errbuf, errlen, "cannot find the cgroup of container %s", name);
 		err = -ENOENT;
-		goto out;
 	}
-	err = 0;
-out:
 	json_decref(root);
-	free(resp);
 	return err;
 }
 #else
