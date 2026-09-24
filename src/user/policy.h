@@ -11,13 +11,9 @@ struct skb_policy;
 
 struct skb_policy *skb_policy_load(const char *path, char *errbuf, size_t errlen);
 
-/* `container` is the event's container name, or NULL for none. Never ALLOW
- * on a list cut short: the forbidden cipher may be in the part not seen. */
-enum skb_verdict skb_policy_check(const struct skb_policy *pol,
-				  const struct skb_event *ev,
-				  const char *container);
-
-/* As skb_policy_check(), and says why in `why` (may be NULL). */
+/* `container` is the event's container name, or NULL for none; `why` gets
+ * the reason and may be NULL. Never ALLOW on a list cut short: the forbidden
+ * cipher may be in the part not seen. */
 enum skb_verdict skb_policy_explain(const struct skb_policy *pol,
 				    const struct skb_event *ev,
 				    const char *container, char *why, size_t len);

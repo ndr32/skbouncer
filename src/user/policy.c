@@ -440,13 +440,6 @@ enum skb_verdict skb_policy_explain(const struct skb_policy *pol,
 	return SKB_VERDICT_ALLOW;
 }
 
-enum skb_verdict skb_policy_check(const struct skb_policy *pol,
-				  const struct skb_event *ev,
-				  const char *container)
-{
-	return skb_policy_explain(pol, ev, container, NULL, 0);
-}
-
 unsigned skb_policy_rule_slot(const struct skb_policy *pol, const char *container)
 {
 	const struct skb_rule *r = match(pol, container);
@@ -464,7 +457,7 @@ bool skb_policy_blocks_unknown(const struct skb_policy *pol)
 	return pol->unknown_block;
 }
 
-/* Must decide exactly as skb_policy_check() does; the kernel mirrors it. */
+/* Must decide exactly as skb_policy_explain() does; the kernel mirrors it. */
 void skb_policy_compile(const struct skb_policy *pol, unsigned slot,
 			struct skb_krule *out)
 {

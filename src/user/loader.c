@@ -16,8 +16,6 @@
 struct skb_loader {
 	struct skbouncer_bpf *skel;
 	struct ring_buffer *rb;
-	uint32_t prog_id;
-	char prog_name[16];	/* BPF_OBJ_NAME_LEN */
 
 	struct bpf_link *link;	/* NULL when not attached */
 	bool enforce;
@@ -60,7 +58,7 @@ static int handle_event(void *ctx, void *data, size_t len)
  * fd goes, however the process ends. Other instances on the same hook keep
  * their own links. An audit instance goes first so it also reports what an
  * enforce instance drops; an enforce instance goes last. */
-static int attach_tcx(struct skb_loader *ldr, const char *ifname,
+int skb_loader_attach(struct skb_loader *ldr, const char *ifname,
 		      enum skb_direction dir)
 {
 	LIBBPF_OPTS(bpf_tcx_opts, opts, .flags = ldr->enforce ? 0 : BPF_F_BEFORE);
@@ -81,10 +79,7 @@ static int attach_tcx(struct skb_loader *ldr, const char *ifname,
 
 struct skb_loader *skb_loader_open(const struct skb_loader_opts *opts)
 {
-	struct bpf_prog_info info = {};
-	__u32 info_len = sizeof(info);
 	struct skb_loader *ldr;
-	int prog_fd, err;
 
 	want_verbose = opts && opts->verbose;
 	libbpf_set_print(print_fn);
@@ -133,19 +128,6 @@ struct skb_loader *skb_loader_open(const struct skb_loader_opts *opts)
 		return NULL;
 	}
 
-	prog_fd = bpf_program__fd(ldr->skel->progs.skb_tc);
-	err = bpf_prog_get_info_by_fd(prog_fd, &info, &info_len);
-	if (err) {
-		fprintf(stderr, "skbouncer: cannot query program info: %s\n",
-			strerror(-err));
-		skbouncer_bpf__destroy(ldr->skel);
-		free(ldr);
-		return NULL;
-	}
-
-	ldr->prog_id = info.id;
-	memcpy(ldr->prog_name, info.name, sizeof(ldr->prog_name) - 1);
-
 	ldr->rb = ring_buffer__new(bpf_map__fd(ldr->skel->maps.events),
 				   handle_event, ldr, NULL);
 	if (!ldr->rb) {
@@ -156,12 +138,6 @@ struct skb_loader *skb_loader_open(const struct skb_loader_opts *opts)
 	}
 
 	return ldr;
-}
-
-int skb_loader_attach(struct skb_loader *ldr, const char *ifname,
-		      enum skb_direction dir)
-{
-	return attach_tcx(ldr, ifname, dir);
 }
 
 int skb_loader_set_rule(struct skb_loader *ldr, uint32_t slot,
@@ -206,16 +182,6 @@ int skb_loader_stats(const struct skb_loader *ldr, uint64_t *out, size_t n)
 			return err;
 	}
 	return 0;
-}
-
-uint32_t skb_loader_prog_id(const struct skb_loader *ldr)
-{
-	return ldr ? ldr->prog_id : 0;
-}
-
-const char *skb_loader_prog_name(const struct skb_loader *ldr)
-{
-	return ldr ? ldr->prog_name : "";
 }
 
 int skb_loader_poll(struct skb_loader *ldr, int timeout_ms)

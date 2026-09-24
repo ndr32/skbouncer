@@ -233,7 +233,7 @@ static __always_inline int is_grease(__u16 v)
 	return (v & 0x0f0f) == 0x0a0a && (v >> 8) == (v & 0xff);
 }
 
-/* skb_policy_check() in userspace, which it must agree with. */
+/* skb_policy_explain() in userspace, which it must agree with. */
 static __always_inline __u8 check_policy(const struct skb_event *ev)
 {
 	const struct skb_krule *r;

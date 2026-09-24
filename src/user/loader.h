@@ -42,11 +42,6 @@ int skb_loader_del_cgroup(struct skb_loader *ldr, uint64_t cgroup_id);
 /* Walks cgroup_rule's keys: prev NULL for the first. -ENOENT past the last. */
 int skb_loader_next_cgroup(struct skb_loader *ldr, const uint64_t *prev,
 			   uint64_t *next);
-uint32_t skb_loader_prog_id(const struct skb_loader *ldr);
-
-/* May be shorter than the C symbol: BPF_OBJ_NAME_LEN is 16 incl. NUL. */
-const char *skb_loader_prog_name(const struct skb_loader *ldr);
-
 /* Reads the kernel-side counters into out[0..SKB_STAT__MAX). `n` is the
  * length of out[]. Returns 0 or a negative errno. */
 int skb_loader_stats(const struct skb_loader *ldr, uint64_t *out, size_t n);
