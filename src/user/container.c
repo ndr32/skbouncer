@@ -15,6 +15,7 @@
  */
 #include <dirent.h>
 #include <errno.h>
+#include <net/if.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -234,6 +235,126 @@ int skb_container_refresh(struct skb_container_map *m)
 	return -ENOTSUP;
 #endif
 }
+
+#ifdef HAVE_JANSSON
+/* The host end of the veth whose peer is one of `pid`'s interfaces. The
+ * container's own sysfs, reached through its root, lists its interfaces;
+ * each one's iflink is the host-side peer's ifindex. */
+static int host_veth(int pid, char *ifname, char *errbuf, size_t errlen)
+{
+	char dir[64], path[512], buf[32];
+	struct dirent *d;
+	unsigned found = 0;
+	DIR *dh;
+
+	snprintf(dir, sizeof(dir), "/proc/%d/root/sys/class/net", pid);
+	if (!(dh = opendir(dir))) {
+		snprintf(errbuf, errlen, "cannot read %s: %s", dir, strerror(errno));
+		return -errno;
+	}
+	while ((d = readdir(dh))) {
+		char own[32] = "", host[IF_NAMESIZE];
+		unsigned link;
+		FILE *f;
+
+		if (d->d_name[0] == '.' || strcmp(d->d_name, "lo") == 0)
+			continue;
+		snprintf(path, sizeof(path), "%s/%s/ifindex", dir, d->d_name);
+		if ((f = fopen(path, "r"))) {
+			if (!fgets(own, sizeof(own), f))
+				own[0] = '\0';
+			fclose(f);
+		}
+		snprintf(path, sizeof(path), "%s/%s/iflink", dir, d->d_name);
+		if (!(f = fopen(path, "r")))
+			continue;
+		link = fgets(buf, sizeof(buf), f) ? strtoul(buf, NULL, 10) : 0;
+		fclose(f);
+		/* iflink == ifindex: no peer, as with --network host. */
+		if (!link || link == strtoul(own, NULL, 10) || !if_indextoname(link, host))
+			continue;
+		if (found++ == 0)
+			snprintf(ifname, IF_NAMESIZE, "%s", host);
+	}
+	closedir(dh);
+	if (found == 1)
+		return 0;
+	snprintf(errbuf, errlen, found ? "has %u network interfaces; pick one with -i" :
+		 "has no veth (host network?)", found);
+	return -ENODEV;
+}
+
+int skb_container_resolve(const char *name, struct skb_container_info *out,
+			  char *errbuf, size_t errlen)
+{
+	char req[512], why[256];
+	const char *id, *body;
+	json_t *root = NULL;
+	struct stat st;
+	size_t len;
+	char *resp;
+	int pid, err = -ENOENT;
+
+	/* A name with / or ? would turn into a different API path. */
+	if (!*name || strpbrk(name, "/?#% ")) {
+		snprintf(errbuf, errlen, "no such container: %s", name);
+		return -ENOENT;
+	}
+	snprintf(req, sizeof(req), "/containers/%s/json", name);
+	if (!(resp = docker_get(req, &len))) {
+		snprintf(errbuf, errlen, "cannot ask dockerd about container %s via "
+			 DOCKER_SOCK, name);
+		return -EIO;
+	}
+	body = strstr(resp, "\r\n\r\n");
+	if (strncmp(resp, "HTTP/1.", 7) == 0 && strncmp(resp + 8, " 404", 4) == 0) {
+		snprintf(errbuf, errlen, "no such container: %s", name);
+		goto out;
+	}
+	if (strncmp(resp, "HTTP/1.", 7) != 0 || strncmp(resp + 8, " 200", 4) != 0 ||
+	    !body || !(root = json_loads(body + 4, 0, NULL))) {
+		snprintf(errbuf, errlen, "dockerd gave no usable answer for container %s", name);
+		err = -EPROTO;
+		goto out;
+	}
+	id = json_string_value(json_object_get(root, "Id"));
+	pid = json_integer_value(json_object_get(json_object_get(root, "State"), "Pid"));
+	if (!id || strchr(id, '/')) {
+		snprintf(errbuf, errlen, "dockerd gave no id for container %s", name);
+		err = -EPROTO;
+		goto out;
+	}
+	if (pid <= 0) {
+		snprintf(errbuf, errlen, "container %s is not running", name);
+		goto out;
+	}
+	if ((err = host_veth(pid, out->ifname, why, sizeof(why)))) {
+		snprintf(errbuf, errlen, "container %s %s", name, why);
+		goto out;
+	}
+	snprintf(out->cgroup, sizeof(out->cgroup),
+		 CGROUP_ROOT "/system.slice/docker-%s.scope", id);
+	if (stat(out->cgroup, &st) != 0)
+		snprintf(out->cgroup, sizeof(out->cgroup), CGROUP_ROOT "/docker/%s", id);
+	if (stat(out->cgroup, &st) != 0) {
+		snprintf(errbuf, errlen, "cannot find the cgroup of container %s", name);
+		err = -ENOENT;
+		goto out;
+	}
+	err = 0;
+out:
+	json_decref(root);
+	free(resp);
+	return err;
+}
+#else
+int skb_container_resolve(const char *name, struct skb_container_info *out,
+			  char *errbuf, size_t errlen)
+{
+	snprintf(errbuf, errlen, "cannot look up container %s: built without jansson", name);
+	return -ENOTSUP;
+}
+#endif
 
 const char *skb_container_lookup(struct skb_container_map *m, uint64_t cgroup_id)
 {

@@ -31,7 +31,10 @@ else
 INCLUDES += $(JANSSON_CFLAGS) -DHAVE_JANSSON
 endif
 
-CFLAGS  := -g -O2 -Wall -Wextra -Wno-unused-parameter
+# Recorded with every result set, so it names the exact commit.
+VERSION := $(shell git describe --always --dirty 2>/dev/null || echo unknown)
+
+CFLAGS  := -g -O2 -Wall -Wextra -Wno-unused-parameter -DSKB_VERSION='"$(VERSION)"'
 LDLIBS  := -lbpf -lelf -lz $(JANSSON_LIBS)
 
 # -Wno-missing-declarations: vmlinux.h emits bare forward declarations for

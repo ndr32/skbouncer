@@ -673,7 +673,7 @@ skb_tc, no test containers.
 
 ## M6.5 — make the CLI usable
 
-Status: not started. Done when `scripts/verify-M6.5.sh` passes.
+Status: verifier passes (iteration 1). Done when `scripts/verify-M6.5.sh` passes.
 
 ### Baseline
 
@@ -689,3 +689,53 @@ Status: not started. Done when `scripts/verify-M6.5.sh` passes.
 ### Iterations
 
 <!-- append below -->
+
+#### Iteration 1 — --container, reasons, wall-clock text
+
+`--container NAME` (`-C`) asks dockerd for `/containers/NAME/json` (404
+gives "no such container: NAME"; a stopped container is refused as not
+running). The veth is found through `/proc/<pid>/root/sys/class/net`: each
+non-lo interface's iflink is the host peer's ifindex. More than one
+peered interface is refused and the operator is asked for `-i`. The cgroup is
+`system.slice/docker-<id>.scope`, or `docker/<id>` for cgroupfs, and
+fills `--cgroup` unless one is given. It then goes through the same
+safety checks as before; they moved out of `parse_args()` into
+`check_args()`, which runs after resolution. `--container` together with
+`-i` is refused. With no `--direction`, a veth defaults to ingress.
+
+`skb_policy_explain()` returns the verdict plus a reason, and
+`skb_policy_check()` now wraps it. The decisions are unchanged, so the
+kernel mirror still agrees. A violation names every broken limit, version
+first: "offers TLS 1.2, minimum is 1.3; offers
+TLS_CHACHA20_POLY1305_SHA256 and others, not permitted". The first attempt
+named only the first bad cipher, and the verifier rejected it:
+
+    FAIL: json downgrade: reason 'offers TLS_CHACHA20_POLY1305_SHA256, not permitted' should mention '1.2'
+
+Unknown reads "versions not seen in full (ClientHello split across
+segments)". Allow reads "complies with rule <pattern>", or names the
+default.
+
+JSON adds `"reason"`, after verdict, and `"time"`, local ISO 8601 with a
++hh:mm offset. Wall time is ktime (CLOCK_MONOTONIC) shifted by the current
+REALTIME-MONOTONIC offset. No existing field changed. Startup, the final
+counter line and every other status line now go to stderr in both formats.
+The prog id and bpftool lines are gone.
+
+Text line: TIME HH:MM:SS, [ACTION], VERDICT, CONTAINER (or "cgroup N"),
+SOURCE, DEST, TLS (1.3,1.2; GREASE skipped), BYTES (captured/record when
+cut), CIPHERS (first real offer by name + count of the rest), REASON. IFACE,
+DIR, the cgroup id, TRUNC and LEGACY left the text view; they are still in
+JSON.
+`--version` prints `skbouncer <git describe>` from the Makefile. A bad
+option now points to `--help` rather than printing the whole usage.
+
+Verifier on the second run:
+
+    PASS: 6 cases, 0 failures      (M3)
+    PASS: 4 cases, 0 failures      (M4)
+    PASS: 13 cases, 0 failures     (M5)
+    PASS: 13 cases, 0 failures     (M6)
+    PASS: 0 failures
+
+Left clean: no skbouncer, no skb_tc attachments, no test containers.
