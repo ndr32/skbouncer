@@ -1,4 +1,4 @@
-# Loop task: M7.1 — evaluation collector
+# Loop task: M7.2 — runtime cost runner
 
 Read `CLAUDE.md` for scope and safety rules; they override this file.
 Read `PROGRESS.md` — you have no memory of earlier iterations. The loop
@@ -6,79 +6,81 @@ appends the verifier's verdict there after every iteration.
 
 ## Goal
 
-`eval/collect.sh` runs a set of TLS clients against a server with skbouncer
-watching, and saves raw data. It scores nothing: the experiments score what
-it saves, later. skbouncer itself is frozen.
+`eval/cost.sh` measures TLS handshake throughput with skbouncer off, in
+audit mode and in enforce mode, and saves raw data. It scores nothing.
+skbouncer itself is frozen. `eval/collect.sh` (M7.1) shows the house style.
 
 ```
-eval/collect.sh --out DIR --mtu N [--timestamps on|off] [--n K] [--policy FILE] CLIENTS
+eval/cost.sh --out DIR [--rounds R] [--seconds S] [--policy FILE]
 ```
 
-`CLIENTS` has one `label|image|command` per line; `#` lines and blank lines
-are skipped. The command runs with `sh -c` in `image`. `@SIP@`, `@PORT@` and
-`@SNI@` become the server's IP, the connection's port, and `api.example.com`,
-which must resolve to the server. Defaults: timestamps on, K = 1.
+Defaults: R = 10, S = 30, policy `eval/cost-policy.json`, which you write:
+it must permit the `s_time` client, so nothing is ever blocked.
 
 ## What it does
 
-1. Everything it creates is named `skb-eval-*` and is removed when it exits,
+1. Everything it creates is named `skb-cost-*` and is removed when it exits,
    on failure and Ctrl-C too.
-2. A Docker network with MTU N. A server container (`skb-tls-test`) with every
-   key exchange group enabled, as in `eval/census/run.sh`, so no client
-   triggers a HelloRetryRequest. One `openssl s_server -msg -naccept 1` per
-   connection, each on its own port, logging to `DIR/server/<port>.log`.
-3. An anchor container on the network, with `net.ipv4.tcp_timestamps` set by
-   `--timestamps`. Each connection's client runs in its own named container
-   that joins the anchor's network namespace (`--network container:<anchor>`):
-   all traffic leaves through one veth, and each client keeps its own cgroup.
-4. skbouncer in audit mode on the anchor's veth, ingress, `--format json`,
-   with `-p` when `--policy` is given. Started before the first client,
-   stopped with SIGINT after the last. Raw output in `DIR/skbouncer.jsonl`
-   and `DIR/skbouncer.err`.
-5. Before any client, the MSS: `getsockopt(TCP_MAXSEG)` on an established
-   TCP connection from the anchor's namespace to the server. That is the
-   payload one segment carries. It must not come from skbouncer.
-6. `DIR/env.txt`, the output of `eval/env.sh`.
-7. `DIR/run.json`:
-   `{"mtu", "timestamps": "on"|"off", "n", "network", "anchor", "mtu_observed", "mss", "counters": {"detected", "delivered", "dropped", "short"}}`.
-   `mtu_observed` is the anchor's `eth0` MTU; `counters` come from
-   skbouncer's exit line.
-8. `DIR/connections.jsonl`, one object per connection, K per client in file
-   order:
-   `{"label", "image", "container", "rep", "port", "mtu", "timestamps", "mss", "client_ok", "server", "events"}`.
-   - `rep` counts 1 to K. `container` is the client container's name.
-   - `client_ok`: the server log shows the client's Finished message. Not
-     the client's exit status: curl against `s_server` times out after a
-     good handshake.
-   - `server`: decoded from the server log, the ground truth.
-     `{"record_len", "legacy_version", "ciphers", "versions"}`, with every
-     cipher and every `supported_versions` value as integers in wire order,
-     GREASE included; `versions` is `[]` when the extension is absent.
-   - `events`: every skbouncer event whose `dport` is this port, verbatim.
+2. A Docker network, MTU 1500. A server container (`skb-tls-test`) running
+   one long-lived `openssl s_server`. A client container (`skb-tls-test`)
+   that runs `openssl s_time -connect <server> -new -time S` once per run.
+3. Runs, in rounds. Round r runs the three conditions starting r - 1 places
+   along: `off, audit, enforce`, then `audit, enforce, off`, then
+   `enforce, off, audit`, and so on.
+   - `off`: nothing loaded.
+   - `audit`: `skbouncer --container <client> --format json -p POLICY`.
+   - `enforce`: the same with `--mode enforce`.
+   skbouncer is attached before `s_time` starts, and stopped with SIGINT
+   after it ends.
+4. Wall time: `s_time` reports whole seconds only, which is too coarse.
+   Time each run yourself to 10 ms or better, around `s_time` itself (the
+   container's `/proc/uptime` has 10 ms resolution; busybox `date` has no
+   `%N`). `cps` is connections ÷ wall seconds.
+5. `bpf_stats`: if `kernel.bpf_stats_enabled` is 1, read the program's
+   `run_cnt` and `run_time_ns` from `bpftool -j prog show` just before
+   stopping skbouncer. Only one skbouncer runs during a run, so exactly one
+   program is named `skb_tc`. If it is 0, record null. Never try to switch
+   it on: `sudo` here covers `./skbouncer` and `bpftool` only.
+6. CPU pinning, when the host has 6 or more CPUs: server, client and
+   skbouncer each on their own CPUs (`--cpuset-cpus`; `taskset` before
+   `sudo -n ./skbouncer`, which the child inherits). With fewer, no pinning.
+7. `DIR/env.txt`, the output of `eval/env.sh`.
+8. `DIR/run.json`:
+   `{"rounds", "seconds", "policy", "nproc", "bpf_stats_enabled", "pinning"}`.
+   `policy` is the policy file's path; `pinning` is null or
+   `{"server", "client", "skbouncer"}`, each a cpuset string such as `"2-3"`.
+9. `DIR/runs.jsonl`, one object per run in the order run:
+   `{"round", "condition", "connections", "wall_seconds", "cps", "attached", "skbouncer"}`.
+   - `connections`: from `s_time`'s `N connections in ...s;` line.
+   - `attached`: how many `skb_tc` programs are on the client's veth,
+     sampled while `s_time` runs.
+   - `skbouncer`: null for `off`, else
+     `{"counters": {"detected", "delivered", "dropped", "short"}, "events", "blocks", "bpf"}`.
+     `counters` from skbouncer's exit line, `events` the number of JSON
+     events, `blocks` how many have `"action": "block"`, `bpf` null or
+     `{"run_cnt", "run_time_ns"}`.
+10. Raw files: `DIR/runs/<round>-<condition>.s_time.txt` (s_time's output),
+    and for audit and enforce `.jsonl` and `.err` (skbouncer's stdout and
+    stderr).
 
-Also `eval/clients.txt`: the census clients (`eval/census/openssl.sh`,
-`others.sh`, `browsers.sh`; not `samples.sh`) in the `CLIENTS` format, with
-the census labels.
+## Done means `scripts/verify-M7.2.sh` passes
 
-skbouncer names a container by asking dockerd, which lists running
-containers only. Every event must name its client's container.
-
-## Done means `scripts/verify-M7.1.sh` passes
-
-It runs the collector at MTU 1500 and 1280 with timestamps on and 1500 with
-them off, and checks the saved ground truth against its own decode of the
-server logs. About two minutes.
+It runs 2 rounds of 5-second runs and checks the saved runs against
+`s_time`'s output and skbouncer's raw events. About a minute. On this VM
+`bpf_stats` is off and there are 2 CPUs, so the verifier expects `bpf` null
+and no pinning here; the same code must fill both on EC2.
 
 ## Rules
 
 - skbouncer is frozen: never edit `src/`, `include/`, `Makefile` or `policy/`.
   The verifier fails if they differ from `main`.
 - Never edit `scripts/verify-*.sh`, `tests/`, `scripts/loop.sh`,
-  `scripts/guard.sh`, `eval/census/` or `eval/env.sh`. If you believe a
-  verifier is wrong, say so in `PROGRESS.md` and stop.
-- Audit mode only. Never run enforce mode.
-- `sudo -n` works for `./skbouncer` and `bpftool` only; the collector needs
-  nothing else as root.
+  `scripts/guard.sh`, `eval/census/`, `eval/env.sh`, `eval/collect.*` or
+  `eval/clients.txt`. If you believe a verifier is wrong, say so in
+  `PROGRESS.md` and stop.
+- Enforce mode only through `--container` on the cost client container.
+  Never on `ens33`, `tailscale0` or `docker0`, never the root cgroup.
+- `sudo -n` works for `./skbouncer` and `bpftool` only.
 - Never run `apt`, `apt-get`, `apt-mark`. Never regenerate `src/bpf/vmlinux.h`.
 - Leave nothing running, attached or created; the verifier checks.
 
