@@ -50,5 +50,5 @@ What each experiment in PLAN.md needs, and whether skbouncer emits it.
     instance, found by `bpftool prog show name skb_tc`.
 - **EC2.** The VPC default MTU is 9001; Docker networks set their own, so
   coverage is unaffected, but record it. Use a non-burstable instance for
-  the cost runs. The build needs clang, libbpf-dev, libjansson-dev and
-  bpftool, whose package name differs between Ubuntu releases.
+  the cost runs. The build needs clang, libbpf-dev, libjansson-dev,
+  libcurl4-openssl-dev and bpftool, whose package name differs between Ubuntu releases.

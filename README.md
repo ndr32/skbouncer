@@ -11,7 +11,7 @@ TCP segment carries, which post-quantum key exchange has made a real problem.
 ## Build
 
 ```
-sudo apt install clang libbpf-dev bpftool libjansson-dev
+sudo apt install clang libbpf-dev bpftool libjansson-dev libcurl4-openssl-dev
 make
 ./skbouncer --version
 ```
