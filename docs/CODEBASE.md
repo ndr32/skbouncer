@@ -147,8 +147,9 @@ Why it is written the way it is:
 - **`enforce.c`.** Works out the scope (the `--cgroup` directory's id and
   depth), checks the interface is a veth, and on each sync points every
   in-scope cgroup at its rule and removes the rest.
-- **`event.c`.** The text columns and the JSON keys. The JSON is the raw
-  event plus container, verdict and reason; the evaluation reads it.
+- **`event.c`.** The text columns, and the JSON object, written by jansson.
+  The JSON is the raw event plus container, verdict and reason; the
+  evaluation reads it.
 
 ## Audit and enforce
 

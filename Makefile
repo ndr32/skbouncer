@@ -20,22 +20,11 @@ USER_OBJS := $(patsubst src/user/%.c,$(BUILD)/%.o,$(USER_SRCS))
 
 INCLUDES := -Iinclude -Isrc/user -I$(BUILD)
 
-# jansson backs the JSON policy parser (M5). The build stays green without
-# it so earlier milestones are not blocked; policy.c compiles to a stub.
-JANSSON_CFLAGS := $(shell pkg-config --cflags jansson 2>/dev/null)
-JANSSON_LIBS   := $(shell pkg-config --libs jansson 2>/dev/null)
-ifeq ($(strip $(JANSSON_LIBS)),)
-$(warning jansson not found: policy support disabled.)
-$(warning   fix with: sudo apt install libjansson-dev)
-else
-INCLUDES += $(JANSSON_CFLAGS) -DHAVE_JANSSON
-endif
-
 # Recorded with every result set, so it names the exact commit.
 VERSION := $(shell git describe --always --dirty 2>/dev/null || echo unknown)
 
 CFLAGS  := -g -O2 -Wall -Wextra -Wno-unused-parameter
-LDLIBS  := -lbpf -lelf -lz -lcurl $(JANSSON_LIBS)
+LDLIBS  := -lbpf -lelf -lz -lcurl -ljansson
 
 # -Wno-missing-declarations: vmlinux.h emits bare forward declarations for
 # anonymous types, which would otherwise bury real warnings.
