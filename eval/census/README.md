@@ -15,7 +15,7 @@ it received (`openssl s_server -msg`), decoded by `parse.py`.
   bytes of record body captured). Other MTUs are modelled, not yet measured.
 
 Reproduce: `FRESH=1 eval/census/run.sh` then
-`python3 eval/census/analyze.py eval/census/results.jsonl`.
+`python3 eval/census/analyze.py eval/census/results.jsonl` (and `serverhello.py`, same argument).
 
 ## Finding
 
@@ -25,3 +25,11 @@ share, so a TLS-version policy can still be judged from the first segment.
 Current browsers put it after the 1.2 KB post-quantum key share: Firefox 147
 0/20 and Safari 26 0/20 connections keep it in the first segment at MTU 1500,
 Chrome 150 6/20. Cipher lists always survive. Full tables: RESULTS.md.
+
+The ServerHello tells the other half (`serverhello.py`, 2026-09-30, same
+logs): the OpenSSL server puts `supported_versions` before its key share, so
+the negotiated cipher and version end by byte 87 in every connection, the
+three browsers that lose the offered versions included. skbouncer reads only
+the ClientHello; a ServerHello reader would recover the negotiated version
+where the offer is cut. One server implementation measured: the ServerHello
+layout is the server's, not the client's.

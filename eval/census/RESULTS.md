@@ -36,3 +36,39 @@
 | chrome150 | 1726–1822 | 147–1822 | 6/20 | 6/20 | 4/20 | 4/20 | 4/20 | 4/20 | 4/20 |
 | firefox147 | 1800–1896 | 1564–1564 | 0/20 | 0/20 | 0/20 | 0/20 | 0/20 | 0/20 | 0/20 |
 | safari260 | 1537–1537 | 1530–1530 | 0/20 | 0/20 | 0/20 | 0/20 | 0/20 | 0/20 | 0/20 |
+
+## ServerHello (server: OpenSSL 3.5.8)
+
+Where the negotiated cipher and version end, in bytes from the start of the record. `eval/census/serverhello.py`.
+
+| Client | ClientHello | ServerHello | Cipher ends | Version ends | ServerHello splits at |
+|---|---:|---:|---:|---:|---|
+| openssl 3.5.8 default | 1543 | 1210 | 78 | 87 | - |
+| openssl X25519 only (classical) | 309 | 122 | 78 | 87 | - |
+| openssl secp256r1 only (classical) | 342 | 155 | 78 | 87 | - |
+| openssl X25519MLKEM768 only | 1485 | 1210 | 78 | 87 | - |
+| openssl SecP256r1MLKEM768 | 1518 | 1243 | 78 | 87 | 1280 |
+| openssl SecP384r1MLKEM1024 | 1934 | 1755 | 78 | 87 | 1500, 1492, 1460, 1450, 1420, 1400, 1280 |
+| openssl MLKEM768 (pure PQ) | 1453 | 1178 | 78 | 87 | - |
+| openssl MLKEM1024 (pure PQ) | 1837 | 1658 | 78 | 87 | 1500, 1492, 1460, 1450, 1420, 1400, 1280 |
+| openssl TLS 1.2 only | 210 | 65 | 46 | legacy_version | - |
+| curl 8.22 (OpenSSL 3.5.8) | 1561 | 1210 | 78 | 87 | - |
+| python 3.14 urllib (OpenSSL 3.5.8) | 1517 | 1210 | 78 | 87 | - |
+| node 26 https (OpenSSL 3.5.8) | 1587 | 1210 | 78 | 87 | - |
+| go 1.27 net/http (crypto/tls) | 1532 | 1210 | 78 | 87 | - |
+| browser chrome116 | 512 | 122 | 78 | 87 | - |
+| browser chrome124 | 1784 | 122 | 78 | 87 | - |
+| browser chrome131 | 1784 | 1210 | 78 | 87 | - |
+| browser chrome150 | 1758 | 1210 | 78 | 87 | - |
+| browser edge101 | 512 | 122 | 78 | 87 | - |
+| browser firefox133 | 1860 | 1210 | 78 | 87 | - |
+| browser firefox147 | 1896 | 1210 | 78 | 87 | - |
+| browser safari184 | 512 | 122 | 78 | 87 | - |
+| browser safari260 | 1537 | 1210 | 78 | 87 | - |
+| browser safari260_ios | 512 | 122 | 78 | 87 | - |
+| browser tor145 | 581 | 122 | 78 | 87 | - |
+| sample chrome150 (20) | | 1210 | 78 | 87 | - |
+| sample firefox147 (20) | | 1210 | 78 | 87 | - |
+| sample safari260 (20) | | 1210 | 78 | 87 | - |
+
+Negotiated cipher and version end by byte 87 of the record in every ServerHello; the smallest first segment modelled holds 1228.

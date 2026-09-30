@@ -7,7 +7,8 @@ Proposal (final, F2) lives on the author's Mac at ~/Desktop/PSB_CU/ICSP/.
 ## What it is
 
 A CLI tool in C/eBPF that:
-1. Reads TLS handshakes (ClientHello/ServerHello, cleartext only) from inside the Linux kernel
+1. Reads TLS ClientHellos (cleartext only) from inside the Linux kernel. The proposal (S2.2.2)
+   also says ServerHello: not built, future work (eval/CONFORMANCE.md)
 2. Attributes each connection to its originating **container** via cgroup v2 id
 3. Enforces an operator-defined JSON policy of permitted cipher suites and protocol versions
 
@@ -28,7 +29,12 @@ Two modes: **audit** (log violations) and **enforce** (block).
   kernel-sensitive and must stay comparable across the whole measurement campaign.
 - clang 21.1.8 | libbpf-dev 1.6.3 | bpftool 7.7.0 | Docker | BTF present at /sys/kernel/btf/vmlinux
 - `src/vmlinux.h` already generated (167k lines)
-- NOTE: proposal S1.5.1 says "Ubuntu 24.04, kernel 6.8" - stale, fix at write-up time.
+- This VM is for development. M7 measures on EC2 (decided 2026-09-30): `ubuntu@skb-ec2`
+  over Tailscale, c7i.2xlarge, ap-southeast-1, Ubuntu 26.04.1, kernel 7.0.0-1013-aws (held,
+  same toolchain versions as here). Full record: eval/env/ec2.txt, from `eval/env.sh`.
+  Code goes over by rsync; images by digest (skb-tls-test by docker save/load). An EBS
+  snapshot replaces the VMware one before enforce runs. Stop the instance when idle.
+  Proposal S1.5.1 ("Ubuntu 24.04, kernel 6.8") gets updated to this at write-up.
 - VM suspend breaks container networking: open-vm-tools' suspend hook flushes every NIC's
   addresses, and on resume only ens33 is reconfigured, so docker0 loses 172.17.0.1.
   Fix after the fact: `sudo systemctl restart docker`. Prevent it:
@@ -39,8 +45,9 @@ Two modes: **audit** (log violations) and **enforce** (block).
 **The enforcement hook problem.** `cgroup/connect4` fires at connect() time, BEFORE any TLS
 handshake exists - there you only know (cgroup, dst IP, dst port). The ClientHello appears
 later on data egress. So "observe and block at the same hook" does not work. Approach:
-- Primary: detect violating ClientHello on tc/clsact egress, return TC_ACT_SHOT
-- Secondary: cache violating (cgroup, dst) in a BPF map so connect4 denies future attempts
+- Built: detect the violating ClientHello at tcx (veth ingress) and drop it
+- Not built: cache violating (cgroup, dst) so connect4 denies future attempts. Planned
+  2026-09-30 to explain in the write-up instead (eval/CONFORMANCE.md)
 
 **cgroup helpers.** `bpf_get_current_cgroup_id()` needs process context, which tc programs do
 NOT have. From tc use `bpf_skb_cgroup_id()`; from socket hooks use `bpf_sk_cgroup_id()`.
