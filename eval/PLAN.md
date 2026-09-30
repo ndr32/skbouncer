@@ -3,7 +3,8 @@
 Replaces the 24 Sep draft. Follows the supervisor's software testing guidance
 of 15 Sep 2026 in shape, adapted to a kernel tool with a command-line interface.
 
-Six experiments. Four are objective testing and two are subjective testing.
+Six experiments test 16 criteria. Experiments 1 to 5 are objective testing
+and experiment 6 is subjective testing.
 Every experiment is written up in the same six parts. The percentages are the
 share of each write-up and come from the supervisor's guidance.
 
@@ -21,6 +22,35 @@ data set and spends the effort on explaining it.
 
 ---
 
+## Evaluation criteria
+
+Targets are fixed before any run. A criterion without a target is reported as
+a measurement and discussed without a pass mark.
+
+| ID | Criterion | Measure | Target | Exp |
+|---|---|---|---|---|
+| C1 | Functional correctness | Rows of the functional table that pass | 14 of 14 | 1 |
+| C2 | Detection rate | ClientHellos reported ÷ ClientHellos sent | 100% | 3 |
+| C3 | False positives | Events on HTTP, SSH and random-byte traffic | 0 | 1 |
+| C4 | Cipher list accuracy | Exact matches among cipher lists flagged complete | 100% | 3 |
+| C5 | Version accuracy | Exact matches among version lists flagged complete | 100% | 3 |
+| C6 | False certainty | Fields flagged complete that differ from the server's decode | 0 | 3 |
+| C7 | Container attribution | Events carrying the correct container name | 100% | 3 |
+| C8 | Truncation reporting | Split ClientHellos flagged as split | 100% | 4 |
+| C9 | Fragmentation coverage | Share of connections with a decidable version verdict, per client and MTU | None, tested against H1 to H3 | 4 |
+| C10 | Verdict agreement | skbouncer's verdict equal to a reference verdict from the server's decode | 100% | 3 |
+| C11 | Enforcement accuracy | Violating ClientHellos blocked, compliant ClientHellos passed | 100% blocked, 0 compliant blocked | 1 |
+| C12 | Safe failure | Fail open on `unknown`, refuse the root cgroup, detach on exit | All hold | 1 |
+| C13 | Handshake overhead | Change in connections per second against skbouncer off | Under 5% | 5 |
+| C14 | Kernel cost per packet | Mean run time per program call | None, reported | 5 |
+| C15 | Event loss | Events dropped with the ring buffer full during experiment 5 | 0 | 5 |
+| C16 | Usability | Nielsen heuristics met, and median survey score on measurable questions | 8 of 10, median 4 of 5 or above | 6 |
+
+The 5% target in C13 and the 8 of 10 target in C16 are the author's choice
+and are set now so the results cannot move them.
+
+---
+
 ## Before any run
 
 - Tag the measured commit `eval-1`. No code changes after the tag.
@@ -34,6 +64,8 @@ data set and spends the effort on explaining it.
 ## Experiment 1. Functional test (black box)
 
 **Objective.** Check that each function in the proposal works as specified.
+
+**Criteria.** C1, C3, C11, C12.
 
 **Method.** Run `scripts/verify-M6.6.sh`, which reruns the M3 to M6.5
 verifiers. Map each verifier case to one row of the table below. Add one
@@ -69,6 +101,8 @@ tcx link.
 
 **Objective.** Show how the kernel side reaches a verdict.
 
+**Criteria.** None scored. Experiment 2 explains the code behind C4, C8 and C11.
+
 **Method.** One system level flowchart and three code segments. Each code
 segment gets an algorithm level flowchart, a line by line explanation and a
 screenshot of its output.
@@ -99,14 +133,19 @@ capped at 64.
 **Objective.** Measure whether the fields skbouncer reports match the bytes
 the client sent.
 
+**Criteria.** C2, C4, C5, C6, C7, C10.
+
 **Method.** The census clients at MTU 1500, 10 connections each, plus two
 edge cases (TLS 1.2 only, an 83-cipher list). Ground truth is the server's
 own decode of the bytes it received (`openssl s_server -msg`, parsed by
 `eval/census/parse.py`). Compare record length, legacy version, cipher list
-in order and versions.
+in order and versions. Compare the container name on each event with the
+name of the container that ran the client. Compute a reference verdict from
+the server's decode under the example policy and compare it with
+skbouncer's verdict.
 
-**Results.** One table. Per field, the count of exact matches among fields
-flagged complete. A second count of fields flagged complete but wrong.
+**Results.** One table with one row per criterion (C2, C4, C5, C6, C7,
+C10), the count, the total and the target.
 
 **Discussion.** A field flagged complete but wrong would let enforce mode
 block or pass a connection on false data. The expected count is zero. Any case above zero is
@@ -121,6 +160,8 @@ hand against the hex bytes.
 
 **Objective.** Measure how much of each ClientHello the first TCP segment
 carries, and whether a version policy can still be judged.
+
+**Criteria.** C8, C9.
 
 **Method.** The census clients at MTU 1500 and MTU 1280, 20 connections
 each, skbouncer on the client's veth. First check that the veth's
@@ -148,13 +189,16 @@ per-packet observer, CryptoMon included.
 
 **Objective.** Measure the handshake cost of running skbouncer.
 
+**Criteria.** C13, C14, C15.
+
 **Method.** `openssl s_time -new -time 30` against the server container.
 Three conditions (off, audit, enforce), alternating, 10 runs each. With
 `kernel.bpf_stats_enabled=1`, also read the program's run time per call from
-`bpftool prog show`.
+`bpftool prog show`. Read the dropped-event counter that skbouncer prints on
+exit after each audit and enforce run.
 
 **Results.** Median connections per second per condition and the change
-from off. Mean nanoseconds per program call.
+from off. Mean nanoseconds per program call. Dropped events per run.
 
 **Limitation.** One 2-CPU VM. The percentage change is the claim, and the
 absolute figures apply to this machine only.
@@ -165,6 +209,8 @@ absolute figures apply to this machine only.
 
 **Objective.** Judge the command-line interface against a recognised set of
 usability heuristics and against the opinion of possible operators.
+
+**Criteria.** C16.
 
 **Method, part A.** Heuristic evaluation against Nielsen's ten usability
 heuristics [Nielsen-1994, verify before use]. One row per heuristic, with the
@@ -188,8 +234,9 @@ theme.
 
 ## Chapter conclusion
 
-One section after experiment 6 that draws the six individual conclusions
-into an overall conclusion.
+One section after experiment 6. The criteria table from this plan with a
+Result column and met or not met in each row, followed by the overall
+conclusion drawn from the six individual conclusions.
 
 ---
 
