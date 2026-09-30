@@ -54,6 +54,7 @@ a stopped or crashed skbouncer leaves nothing attached. Known limits are in
 ## Layout
 
 ```
+docs/CODEBASE.md      how the code fits together; start here to review it
 include/skbouncer.h   event and rule formats shared by kernel and userspace
 src/bpf/              tcx program: detect, measure, walk, judge, drop
 src/user/             CLI, loader, container lookup, policy, enforcement, output
