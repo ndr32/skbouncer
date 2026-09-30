@@ -954,3 +954,30 @@ client_ok with one correctly named event each, counters 24/24/0/0. An
 interrupted run (SIGINT, restored to default first: a background job in a
 non-interactive shell starts with SIGINT ignored) exits 130 and leaves no
 containers, network, skbouncer or skb_tc behind.
+
+## M7.2 — runtime cost runner
+
+#### Iteration 1
+
+`eval/cost.sh` (bash: network, server, client, rotated runs) plus
+`eval/cost.py` (one `runs.jsonl` record per run from its raw files) and
+`eval/cost-policy.json` (default deny; `skb-cost-*` allowed at TLS 1.2+).
+
+- Server: one `s_server -quiet -accept 4433` as the container's main process.
+  Client: `sleep infinity`; each run is `docker exec` of s_time between two
+  reads of `/proc/uptime`, printed to stderr so `.s_time.txt` holds s_time
+  only. The `.wall` scratch files are removed at the end.
+- `attached`: `bpftool net show dev <veth>` 1 s into the run. The veth is
+  found from the client's `eth0` iflink, so `off` runs are sampled too.
+- Pinning at 6+ CPUs: skbouncer 1, server 2, client 3 (CPU 0 left to the
+  host; on c7i.2xlarge 1-3 are distinct cores). `taskset -c 1 sudo -n ./skbouncer`.
+- `bpf`: `bpftool -j prog show name skb_tc` only when bpf_stats is 1; not
+  exercised here (stats off, 2 CPUs), so the EC2 run is its first test.
+- s_time runs up to S + 1 s (it checks whole seconds): 3.4-3.9 s for `-time 3`.
+  Every s_time ClientHello is 1519 bytes, cut at segment 1 (captured 1443),
+  and still `allow` (versions seen); enforce events all `pass`.
+
+Verifier, first run: `PASS: 0 failures` (median cps off 160.7, audit 144.7,
+enforce 149.8 over 2 x 5 s; noise at this length). SIGINT during an audit
+run: exit 130, skbouncer printed its exit line, no containers, network,
+skbouncer or skb_tc left.
