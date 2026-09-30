@@ -24,10 +24,8 @@
 
 #include "container.h"
 
-#ifdef HAVE_JANSSON
 #include <curl/curl.h>
 #include <jansson.h>
-#endif
 
 #define DOCKER_SOCK	"/var/run/docker.sock"
 #define CGROUP_ROOT	"/sys/fs/cgroup"
@@ -124,7 +122,6 @@ static void put_tree(struct skb_container_map *m, const char *path,
 	closedir(dir);
 }
 
-#ifdef HAVE_JANSSON
 struct body {
 	char *p;
 	size_t n;
@@ -190,11 +187,9 @@ static int cgroup_of(const char *id, char *path, size_t len)
 	snprintf(path, len, CGROUP_ROOT "/docker/%s", id);
 	return stat(path, &st) == 0 ? 0 : -1;
 }
-#endif
 
 int skb_container_refresh(struct skb_container_map *m)
 {
-#ifdef HAVE_JANSSON
 	json_t *root, *c;
 	int status;
 	size_t i;
@@ -216,13 +211,8 @@ int skb_container_refresh(struct skb_container_map *m)
 	}
 	json_decref(root);
 	return 0;
-#else
-	(void)m;
-	return -ENOTSUP;
-#endif
 }
 
-#ifdef HAVE_JANSSON
 /* The host end of the veth whose peer is one of `pid`'s interfaces. The
  * container's own sysfs, reached through its root, lists its interfaces;
  * each one's iflink is the host-side peer's ifindex. */
@@ -313,14 +303,6 @@ int skb_container_resolve(const char *name, struct skb_container_info *out,
 	json_decref(root);
 	return err;
 }
-#else
-int skb_container_resolve(const char *name, struct skb_container_info *out,
-			  char *errbuf, size_t errlen)
-{
-	snprintf(errbuf, errlen, "cannot look up container %s: built without jansson", name);
-	return -ENOTSUP;
-}
-#endif
 
 const char *skb_container_lookup(struct skb_container_map *m, uint64_t cgroup_id)
 {

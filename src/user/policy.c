@@ -10,9 +10,7 @@
 
 #include "policy.h"
 
-#ifdef HAVE_JANSSON
 #include <jansson.h>
-#endif
 
 struct skb_rule {
 	char *container;	/* fnmatch() pattern */
@@ -111,8 +109,6 @@ static const struct { const char *name; uint16_t id; } cipher_names[] = {
 	{ "TLS_EMPTY_RENEGOTIATION_INFO_SCSV",             SKB_SCSV_RENEGOTIATION },
 	{ "TLS_FALLBACK_SCSV",                             SKB_SCSV_FALLBACK },
 };
-
-#ifdef HAVE_JANSSON
 
 static bool parse_cipher(const char *s, uint16_t *out)
 {
@@ -295,17 +291,6 @@ err:
 	skb_policy_free(pol);
 	return NULL;
 }
-
-#else
-
-struct skb_policy *skb_policy_load(const char *path, char *errbuf, size_t errlen)
-{
-	snprintf(errbuf, errlen,
-		 "built without jansson; run: sudo apt install libjansson-dev");
-	return NULL;
-}
-
-#endif
 
 static const struct skb_rule *match(const struct skb_policy *pol,
 				    const char *container)

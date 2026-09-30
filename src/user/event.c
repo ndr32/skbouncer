@@ -5,6 +5,8 @@
 #include <string.h>
 #include <time.h>
 
+#include <jansson.h>
+
 #include "event.h"
 #include "policy.h"
 
@@ -147,83 +149,74 @@ void skb_event_print(FILE *out, const struct skb_event *ev, const char *containe
 		tls, bytes, ciphers, reason ? " " : "", reason ? reason : "");
 }
 
-static void u16_array(FILE *out, const __u16 *v, unsigned n, unsigned max)
+/* A list in wire order, as host-order numbers. */
+static json_t *u16_list(const __u16 *v, unsigned n, unsigned max)
 {
-	fputc('[', out);
+	json_t *a = json_array();
+
 	for (unsigned i = 0; i < n && i < max; i++)
-		fprintf(out, "%s%u", i ? "," : "", ntohs(v[i]));
-	fputc(']', out);
+		json_array_append_new(a, json_integer(ntohs(v[i])));
+	return a;
 }
 
-/* Docker names are [a-zA-Z0-9][a-zA-Z0-9_.-]+, but escape anyway. */
-static void json_str(FILE *out, const char *s)
+/* ISO 8601 local time with a +hh:mm offset, which %z does not give. */
+static const char *iso_time(uint64_t ktime_ns, char *buf, size_t len)
 {
-	if (!s) {
-		fputs("null", out);
-		return;
-	}
-	fputc('"', out);
-	for (; *s; s++) {
-		unsigned char c = *s;
+	struct timespec ts = wall_time(ktime_ns);
+	char stamp[32], zone[8];
+	struct tm tm;
 
-		if (c == '"' || c == '\\')
-			fprintf(out, "\\%c", c);
-		else if (c < 0x20)
-			fprintf(out, "\\u%04x", c);
-		else
-			fputc(c, out);
-	}
-	fputc('"', out);
+	localtime_r(&ts.tv_sec, &tm);
+	strftime(stamp, sizeof(stamp), "%Y-%m-%dT%H:%M:%S", &tm);
+	strftime(zone, sizeof(zone), "%z", &tm);
+	snprintf(buf, len, "%s.%06ld%.3s:%.2s", stamp, ts.tv_nsec / 1000, zone, zone + 3);
+	return buf;
 }
 
 void skb_event_print_json(FILE *out, const struct skb_event *ev,
 			  const char *container, const char *verdict, const char *reason)
 {
-	char src[INET_ADDRSTRLEN], dst[INET_ADDRSTRLEN];
-	struct timespec ts = wall_time(ev->ktime_ns);
-	char stamp[64], zone[8];
-	struct tm tm;
+	char src[INET_ADDRSTRLEN], dst[INET_ADDRSTRLEN], when[48];
+	json_t *o;
 
-	fprintf(out, "{\"ktime_ns\":%llu,\"ifindex\":%u,\"direction\":\"%s\","
-		"\"cgroup_id\":%llu,\"container\":",
-		(unsigned long long)ev->ktime_ns, ev->ifindex,
-		skb_direction_name(ev->direction),
-		(unsigned long long)ev->cgroup_id);
-	json_str(out, container);
-	fprintf(out, ",\"saddr\":\"%s\",\"sport\":%u,"
-		"\"daddr\":\"%s\",\"dport\":%u,\"record_len\":%u,"
-		"\"captured_len\":%u,\"trunc\":\"%s\",\"handshake_len\":%u,"
-		"\"legacy_version\":%u,\"versions\":",
-		ip4(src, ev->tuple.saddr), ntohs(ev->tuple.sport),
-		ip4(dst, ev->tuple.daddr), ntohs(ev->tuple.dport),
-		ev->record_len, ev->captured_len, trunc_name(ev->trunc_reason),
-		ev->handshake_len, ev->legacy_version);
-	u16_array(out, ev->versions, ev->n_versions, SKB_MAX_VERSIONS);
-	fputs(",\"ciphers\":", out);
-	u16_array(out, ev->ciphers, ev->n_ciphers, SKB_MAX_CIPHERS);
-	fprintf(out, ",\"ciphers_capped\":%s,\"ciphers_seen\":%s,\"versions_seen\":%s",
-		ev->ciphers_capped ? "true" : "false",
-		ev->seen & SKB_SEEN_CIPHERS ? "true" : "false",
-		ev->seen & SKB_SEEN_VERSIONS ? "true" : "false");
-	if (verdict)
-		fprintf(out, ",\"verdict\":\"%s\"", verdict);
-	if (reason) {
-		fputs(",\"reason\":", out);
-		json_str(out, reason);
+	o = json_pack("{s:I, s:I, s:s, s:I, s:s?, s:s, s:i, s:s, s:i, s:i, s:i, s:s,"
+		      " s:i, s:i, s:o, s:o, s:b, s:b, s:b}",
+		"ktime_ns", (json_int_t)ev->ktime_ns,
+		"ifindex", (json_int_t)ev->ifindex,
+		"direction", skb_direction_name(ev->direction),
+		"cgroup_id", (json_int_t)ev->cgroup_id,
+		"container", container,
+		"saddr", ip4(src, ev->tuple.saddr),
+		"sport", ntohs(ev->tuple.sport),
+		"daddr", ip4(dst, ev->tuple.daddr),
+		"dport", ntohs(ev->tuple.dport),
+		"record_len", ev->record_len,
+		"captured_len", ev->captured_len,
+		"trunc", trunc_name(ev->trunc_reason),
+		"handshake_len", ev->handshake_len,
+		"legacy_version", ev->legacy_version,
+		"versions", u16_list(ev->versions, ev->n_versions, SKB_MAX_VERSIONS),
+		"ciphers", u16_list(ev->ciphers, ev->n_ciphers, SKB_MAX_CIPHERS),
+		"ciphers_capped", ev->ciphers_capped,
+		"ciphers_seen", !!(ev->seen & SKB_SEEN_CIPHERS),
+		"versions_seen", !!(ev->seen & SKB_SEEN_VERSIONS));
+	if (!o) {
+		fprintf(stderr, "skbouncer: cannot encode an event as JSON\n");
+		return;
 	}
+	if (verdict)
+		json_object_set_new(o, "verdict", json_string(verdict));
+	if (reason)
+		json_object_set_new(o, "reason", json_string(reason));
 	/* The kernel only judges in enforce mode, where action is set, and
 	 * only in scope; elsewhere kernel_verdict is null. */
 	if (ev->action) {
-		fprintf(out, ",\"action\":\"%s\",\"kernel_verdict\":", action_name(ev->action));
-		if (ev->verdict == SKB_VERDICT_NONE)
-			fputs("null", out);
-		else
-			fprintf(out, "\"%s\"", skb_verdict_str(ev->verdict));
+		json_object_set_new(o, "action", json_string(action_name(ev->action)));
+		json_object_set_new(o, "kernel_verdict", ev->verdict == SKB_VERDICT_NONE ?
+				    json_null() : json_string(skb_verdict_str(ev->verdict)));
 	}
-	/* ISO 8601 local time with a +hh:mm offset, which %z does not give. */
-	localtime_r(&ts.tv_sec, &tm);
-	strftime(stamp, sizeof(stamp), "%Y-%m-%dT%H:%M:%S", &tm);
-	strftime(zone, sizeof(zone), "%z", &tm);
-	fprintf(out, ",\"time\":\"%s.%06ld%.3s:%.2s\"}\n", stamp,
-		ts.tv_nsec / 1000, zone, zone + 3);
+	json_object_set_new(o, "time", json_string(iso_time(ev->ktime_ns, when, sizeof(when))));
+	json_dumpf(o, out, JSON_COMPACT);
+	fputc('\n', out);
+	json_decref(o);
 }
