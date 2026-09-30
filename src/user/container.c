@@ -20,15 +20,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/socket.h>
 #include <sys/stat.h>
-#include <sys/time.h>
-#include <sys/un.h>
-#include <unistd.h>
 
 #include "container.h"
 
 #ifdef HAVE_JANSSON
+#include <curl/curl.h>
 #include <jansson.h>
 #endif
 
@@ -127,80 +124,55 @@ static void put_tree(struct skb_container_map *m, const char *path,
 	closedir(dir);
 }
 
-/* HTTP/1.0 so dockerd neither chunks the body nor keeps the connection:
- * the body simply runs to EOF. The timeouts bound how long a wedged dockerd
- * can stall the event loop. */
-static char *docker_get(const char *req_path, size_t *len)
+#ifdef HAVE_JANSSON
+struct body {
+	char *p;
+	size_t n;
+};
+
+/* curl's write callback: appends, and aborts past RESP_MAX. */
+static size_t on_body(char *data, size_t size, size_t nmemb, void *ctx)
 {
-	struct sockaddr_un sa = { .sun_family = AF_UNIX, .sun_path = DOCKER_SOCK };
-	struct timeval tv = { .tv_sec = 1 };
-	char req[256];
-	char *buf = NULL;
-	size_t n = 0, cap = 0;
-	int fd, rlen;
+	struct body *b = ctx;
+	size_t len = size * nmemb;
+	char *p;
 
-	fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
-	if (fd < 0)
-		return NULL;
-	setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-	setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
-	rlen = snprintf(req, sizeof(req),
-			"GET %s HTTP/1.0\r\nHost: docker\r\n\r\n", req_path);
-	if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) != 0 ||
-	    write(fd, req, rlen) != rlen)
-		goto fail;
-
-	for (;;) {
-		ssize_t r;
-
-		if (n + 1 >= cap) {
-			char *nb;
-
-			if (cap >= RESP_MAX)
-				goto fail;
-			cap = cap ? cap * 2 : 16384;
-			if (!(nb = realloc(buf, cap)))
-				goto fail;
-			buf = nb;
-		}
-		r = read(fd, buf + n, cap - n - 1);
-		if (r < 0 && errno == EINTR)
-			continue;
-		if (r < 0)
-			goto fail;
-		if (r == 0)
-			break;
-		n += r;
-	}
-	close(fd);
-	buf[n] = '\0';
-	*len = n;
-	return buf;
-fail:
-	close(fd);
-	free(buf);
-	return NULL;
+	if (b->n + len > RESP_MAX || !(p = realloc(b->p, b->n + len)))
+		return 0;
+	memcpy(p + b->n, data, len);
+	b->p = p;
+	b->n += len;
+	return len;
 }
 
-#ifdef HAVE_JANSSON
-/* GET `path` from dockerd. Returns the parsed body on a 200, else NULL, with
- * *status the HTTP status, or 0 when dockerd gave no parsable answer. */
+/* GET `path` from dockerd over its unix socket. Returns the parsed body on
+ * a 200, else NULL, with *status the HTTP status, or 0 when dockerd gave no
+ * answer. The timeout bounds how long a wedged dockerd can stall the event
+ * loop. */
 static json_t *docker_json(const char *path, int *status)
 {
-	size_t len;
-	char *resp = docker_get(path, &len);
-	char *body;
+	struct body b = {};
 	json_t *root = NULL;
+	char url[512];
+	long code = 0;
+	CURL *c;
 
 	*status = 0;
-	if (!resp)
+	if (!(c = curl_easy_init()))
 		return NULL;
-	if (len > 12 && strncmp(resp, "HTTP/1.", 7) == 0 && resp[8] == ' ')
-		*status = atoi(resp + 9);
-	body = strstr(resp, "\r\n\r\n");
-	if (*status == 200 && body)
-		root = json_loads(body + 4, 0, NULL);
-	free(resp);
+	snprintf(url, sizeof(url), "http://docker%s", path);
+	curl_easy_setopt(c, CURLOPT_UNIX_SOCKET_PATH, DOCKER_SOCK);
+	curl_easy_setopt(c, CURLOPT_URL, url);
+	curl_easy_setopt(c, CURLOPT_TIMEOUT_MS, 1000L);
+	curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, on_body);
+	curl_easy_setopt(c, CURLOPT_WRITEDATA, &b);
+	if (curl_easy_perform(c) == CURLE_OK &&
+	    curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &code) == CURLE_OK)
+		*status = (int)code;
+	if (*status == 200 && b.p)
+		root = json_loadb(b.p, b.n, 0, NULL);
+	curl_easy_cleanup(c);
+	free(b.p);
 	return root;
 }
 

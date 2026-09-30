@@ -134,8 +134,8 @@ Why it is written the way it is:
   attaches through tcx, and gives the rest of the code small functions for
   the maps. An audit instance attaches first on the hook and an enforce
   instance last, so an auditor also reports what an enforcer drops.
-- **`container.c`.** Talks to dockerd over `/var/run/docker.sock` (plain
-  HTTP, no Docker CLI). A container's cgroup id is the inode number of its
+- **`container.c`.** Talks to dockerd over `/var/run/docker.sock` with
+  libcurl (no Docker CLI). A container's cgroup id is the inode number of its
   cgroup directory, so the name map is built by listing containers and
   `stat()`ing each one's directory. Unknown ids trigger one refresh, then
   are cached as misses. `skb_container_resolve()` turns `--container NAME`

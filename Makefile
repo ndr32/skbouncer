@@ -35,7 +35,7 @@ endif
 VERSION := $(shell git describe --always --dirty 2>/dev/null || echo unknown)
 
 CFLAGS  := -g -O2 -Wall -Wextra -Wno-unused-parameter
-LDLIBS  := -lbpf -lelf -lz $(JANSSON_LIBS)
+LDLIBS  := -lbpf -lelf -lz -lcurl $(JANSSON_LIBS)
 
 # -Wno-missing-declarations: vmlinux.h emits bare forward declarations for
 # anonymous types, which would otherwise bury real warnings.
