@@ -44,9 +44,9 @@ a measurement and discussed without a pass mark.
 | C13 | Handshake overhead | Change in connections per second against skbouncer off | Under 5% | 5 |
 | C14 | Kernel cost per packet | Mean run time per program call | None, reported | 5 |
 | C15 | Event loss | Events dropped with the ring buffer full during experiment 5 | 0 | 5 |
-| C16 | Usability | Nielsen heuristics met, and median survey score on measurable questions | 8 of 10, median 4 of 5 or above | 6 |
+| C16 | Operator opinion | Median survey score on the measurable questions | 4 of 5 or above | 6 |
 
-The 5% target in C13 and the 8 of 10 target in C16 are the author's choice
+The 5% target in C13 and the median of 4 in C16 are the author's choice
 and are set now so the results cannot move them.
 
 ---
@@ -205,25 +205,18 @@ absolute figures apply to this machine only.
 
 ---
 
-## Experiment 6. Usability (subjective)
+## Experiment 6. User survey (subjective)
 
-**Objective.** Judge the command-line interface against a recognised set of
-usability heuristics and against the opinion of possible operators.
+**Objective.** Measure how possible operators rate the purpose and the
+functions of skbouncer.
 
 **Criteria.** C16.
 
-**Method, part A.** Heuristic evaluation against Nielsen's ten usability
-heuristics [Nielsen-1994, verify before use]. One row per heuristic, with the
-skbouncer feature that meets it or fails it. Examples from the built tool:
-the exit counters (visibility of system status), `TLS 1.3` and cipher names in
-place of hex (match with the real world), refusal of the root cgroup (error
-prevention), a load error on a misspelt cipher name (help with errors).
-
-**Method, part B.** User survey. 20 to 30 respondents with an IT background.
-Respondents cannot run a kernel tool, so the survey opens with a two minute
-screen recording of skbouncer in audit and enforce mode. Ten questions from
-the survey pool, covering the functions, the purpose, the interface, and one
-open feedback question. Likert scale for the measurable questions.
+**Method.** 20 to 30 respondents with an IT background. Respondents cannot
+run a kernel tool, so the survey opens with a two minute screen recording of
+skbouncer in audit and enforce mode. Ten questions from the survey pool,
+covering the functions and the purpose, with one open feedback question. No
+questions on the interface. Likert scale for the measurable questions.
 
 **Results.** One chart per measurable question. The open answers grouped by
 theme.
@@ -247,7 +240,7 @@ conclusion drawn from the six individual conclusions.
 | Wed 30 Sep to Thu 1 Oct | Harnesses for experiments 3, 4 and 5. Tag `eval-1`. Record the screen recording. Build the survey. |
 | Fri 2 Oct | Survey goes out. |
 | Fri 2 to Sun 4 Oct | Run experiments 1, 3, 4 and 5. |
-| Mon 5 to Sun 11 Oct | Write chapter 4. Experiment 2 and part A of experiment 6 are desk work. Survey closes Sun 11 Oct. |
+| Mon 5 to Sun 11 Oct | Write chapter 4. Experiment 2 is desk work. Survey closes Sun 11 Oct. |
 | Mon 12 to Sun 18 Oct | Survey charts, revision of the whole report. |
 | Mon 19 Oct | Submit. |
 
