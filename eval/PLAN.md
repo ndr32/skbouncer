@@ -1,145 +1,215 @@
-# M7 evaluation plan
+# Chapter 4 evaluation plan
 
-Draft for review. Nothing is measured until the method below is agreed, so
-the method cannot be shaped by the numbers.
+Replaces the 24 Sep draft. Follows the supervisor's software testing guidance
+of 15 Sep 2026 in shape, adapted to a kernel tool with a command-line interface.
 
-The proposal asks for three things: parse accuracy, fragmentation coverage,
-and runtime cost. The census (`eval/census/`) already predicts the second;
-M7 measures it with skbouncer itself.
+Six experiments. Four are objective testing and two are subjective testing.
+Every experiment is written up in the same six parts. The percentages are the
+share of each write-up and come from the supervisor's guidance.
+
+| Part | Share | Answers |
+|---|---:|---|
+| Objective | 5% | What the experiment tests |
+| Method | 10% | How it was done |
+| Results | 10% | The table, chart or output |
+| Analysis | 30% | What the results show |
+| Discussion | 40% | Why, in terms of the design and the code |
+| Conclusion | 5% | Three to five points |
+
+Discussion carries the most weight. Each experiment therefore collects a small
+data set and spends the effort on explaining it.
+
+---
 
 ## Before any run
 
-- **Freeze the tool.** Tag the commit measured (`eval-1`); every result set
-  records `skbouncer --version`. No code changes during a campaign.
-- **Freeze the host.** Kernel 7.0.0-31-generic (held), no VM suspend during a
-  run, no standing VMware snapshot, chrony synchronised.
-- **Record with every result set** (`env.json`, written by the harness):
-  skbouncer version, kernel, client and server OpenSSL versions, Docker
-  version, network MTU, TCP timestamps on/off, `ethtool -k` offload state of
-  the veth under test, `uptime`, chrony status, CPU and memory.
+- Tag the measured commit `eval-1`. No code changes after the tag.
+- Kernel 7.0.0-31-generic (held). No VM suspend during a run.
+- Save `env.json` with every result set. It records the skbouncer version,
+  the kernel, the client and server OpenSSL versions, the Docker version, the
+  network MTU and the `ethtool -k` offload state of the veth under test.
 
-## Experiment 1 — fragmentation coverage (the research contribution)
+---
 
-**Question.** Across clients and real path MTUs, how much of the ClientHello
-does a first-segment observer see, and do the fields a policy needs
-survive?
+## Experiment 1. Functional test (black box)
 
-**Setup.** One Docker network per MTU: 1500, 1492, 1460, 1420, 1400, 1280.
-Client and server containers on the same network, skbouncer on the client's
-veth. Each MTU run twice: TCP timestamps on (Linux, macOS) and off
-(Windows), set per container with `--sysctl`.
+**Objective.** Check that each function in the proposal works as specified.
 
-**Clients.** The census set: OpenSSL 3.5.8 across key exchange groups
-(classical, hybrid, pure ML-KEM), curl, Python, Node, Go, and browsers via
-curl-impersonate. 30 handshakes per client per condition; Chrome permutes
-extension order, so Chrome gets 100.
+**Method.** Run `scripts/verify-M6.6.sh`, which reruns the M3 to M6.5
+verifiers. Map each verifier case to one row of the table below. Add one
+control row with skbouncer stopped.
 
-**Measured per handshake.** Record length, bytes in the first segment,
-truncation reason, whether ciphers and versions were seen in full, and the
-verdict under a reference policy with both `min_version` and `ciphers`.
+| No | Function | Input | Expected |
+|---|---|---|---|
+| 1 | Detect a ClientHello | TLS 1.3 handshake from a container | One event |
+| 2 | Ignore other traffic | HTTP, SSH, random bytes mid-connection | No event |
+| 3 | Read the cipher suites | Forced cipher list | Same list, GREASE removed |
+| 4 | Read the versions | TLS 1.2 only, TLS 1.3 | Versions from `supported_versions` |
+| 5 | Flag a split ClientHello | Post-quantum ClientHello | Bytes seen below record length |
+| 6 | Name the container | Two containers at once | Correct name on each event |
+| 7 | Audit a violation | TLS 1.2 client, policy minimum 1.3 | `violation`, handshake completes |
+| 8 | Enforce a violation | Same, `--mode enforce` | Server never receives the ClientHello |
+| 9 | Fail open | Versions cut off, `on_unknown` allow | `unknown`, handshake completes |
+| 10 | Block unknown on request | Same, `on_unknown` block | Server never receives the ClientHello |
+| 11 | Refuse the root cgroup | `--cgroup /sys/fs/cgroup` | Refused with a message |
+| 12 | Refuse a non-veth in enforce mode | `-i ens33 --mode enforce` | Refused with a message |
+| 13 | Detach on exit | Kill with SIGINT and SIGPIPE | No program left attached |
+| 14 | Control | Row 8 with skbouncer stopped | Handshake completes |
 
-**Reported.**
-- Visible fraction of the ClientHello, per client × MTU (median, IQR).
-- Share of connections whose versions were seen in full (the field a
-  version policy needs), with 95% Wilson intervals.
-- **Enforceability**: share of connections a version policy can decide
-  (`allow` or `violation`, not `unknown`).
-- The census model (first segment = MTU − 52 with timestamps, − 40
-  without) against the measurement, per MTU.
+**Results.** The table with a Result column and PASS or FAIL.
 
-**Hypotheses, stated in advance.**
-- H1. Every post-quantum ClientHello exceeds one segment at every MTU
-  tested; no classical one does.
-- H2. Whether `supported_versions` survives depends on the implementation's
-  extension order, not on MTU: OpenSSL-based clients and Go keep it,
-  Firefox and Safari lose it, Chrome loses it in most connections.
-- H3. Cipher lists survive in every case measured.
+**Discussion.** Link each row to the part of the design that makes it pass.
+Row 8 against row 7 shows the kernel dropping the ClientHello. Row 14 shows
+the block in row 8 came from skbouncer. Row 13 covers the process owning the
+tcx link.
 
-**Check first.** At one MTU, confirm the veth's `gso_size` follows the
-network MTU. If it does not, the MTU arm measures nothing and is redesigned.
+---
 
-## Experiment 2 — parse accuracy
+## Experiment 2. Code tracing (white box)
 
-**Question.** When skbouncer reports a field, is it right?
+**Objective.** Show how the kernel side reaches a verdict.
 
-**Ground truth.** The server's own decode of the bytes it received
-(`openssl s_server -msg`), parsed independently, as in the verifiers.
+**Method.** One system level flowchart and three code segments. Each code
+segment gets an algorithm level flowchart, a line by line explanation and a
+screenshot of its output.
 
-**Clients.** Experiment 1's set at MTU 1500, plus the edge cases the
-verifiers use (TLS 1.2 only, 83 ciphers, a long ALPN list). For
-external validity, a subset from **real headless Chromium and Firefox** in
-containers, to test curl-impersonate's fidelity rather than assume it.
+- System level flowchart. Packet reaches the veth, `skb_tc()` runs,
+  `not_a_hello()` filters, `walk_hello()` reads, `check_policy()` judges,
+  the packet is dropped or passed, the event goes to the ring buffer, and
+  userspace names the container and prints the line.
+- Segment A. `not_a_hello()`. A decision chain of three structural checks
+  that rejects bytes resembling a TLS record.
+- Segment B. `walk_hello()`. The bounded walk over the cipher list (capped at
+  64) and the extensions, the GREASE skip, and the truncation reason.
+- Segment C. The `gso_size` clamp in `skb_tc()`. Without it every split
+  ClientHello reports as complete.
 
-**Reported.**
-- Detection: ClientHellos seen ÷ ClientHellos sent; duplicates.
-- Per field (record length, legacy version, ciphers in order, cap flag,
-  versions): exact-match rate among fields flagged seen in full.
-- **False-certainty rate**: fields flagged seen in full that are wrong.
-  The claim is that this is zero; one counterexample matters more than the
-  rate.
-- Verdict agreement with a reference verdict computed from ground truth
-  and the same policy.
-- False positives: events on non-TLS traffic (HTTP, SSH, random binary,
-  the verifier's mid-connection junk), per 10,000 connections.
+**Results.** The flowcharts, the code, and the output of each segment. For
+segment C, the before and after lines from PROGRESS.md (a 1557-byte record
+reported 1557 bytes seen and `none`, then 1455 bytes seen and `segment`).
 
-## Experiment 3 — runtime cost
+**Discussion.** The verifier limits that shaped segment B (bounded loops,
+`data_end` checks). The measured reason for segment C. Why the cipher list is
+capped at 64.
 
-**Question.** What does skbouncer cost the traffic it watches?
+---
 
-**Conditions.** Not attached (baseline), audit, enforce; interleaved
-(A-B-C-A-B-C...) across runs so VM drift does not favour one condition.
+## Experiment 3. Parse accuracy
 
-**Measured.**
-- **Handshake latency**: TLS handshake time, client side, 1,000 handshakes
-  per condition. Median, p95, p99, and the difference from baseline with a
-  bootstrap 95% interval.
-- **Per-packet kernel cost**: the BPF program's run time per invocation
-  (`bpf_stats`), on ClientHello packets and on ordinary packets separately.
-- **Throughput**: bulk non-TLS transfer between containers (iperf3), since
-  the program runs on every packet, not only handshakes.
-- **Userspace**: CPU and resident memory over a run, including the
-  once-a-second container refresh in enforce mode.
-- **Saturation**: the handshake rate at which events are first dropped
-  (ringbuf full), using the detected/delivered/dropped counters.
+**Objective.** Measure whether the fields skbouncer reports match the bytes
+the client sent.
 
-Absolute numbers on a 2-CPU VM over a virtual network are small and
-host-specific; the result is the overhead relative to baseline.
+**Method.** The census clients at MTU 1500, 10 connections each, plus two
+edge cases (TLS 1.2 only, an 83-cipher list). Ground truth is the server's
+own decode of the bytes it received (`openssl s_server -msg`, parsed by
+`eval/census/parse.py`). Compare record length, legacy version, cipher list
+in order and versions.
 
-## Threats to validity (for the write-up)
+**Results.** One table. Per field, the count of exact matches among fields
+flagged complete. A second count of fields flagged complete but wrong.
 
-- A VM on a virtual path: segmentation is modelled by `gso_size`, not done
-  by a NIC. Experiment 1's check guards the MTU arm; the rest is stated.
-- curl-impersonate reproduces browser fingerprints; the real-browser subset
-  measures how closely.
-- Single host, IPv4, Docker's default bridge, one kernel.
-- The observer is first-segment by design; the result describes that class
-  of tool (including per-packet observers like CryptoMon), not TLS monitoring
-  with stream reassembly.
-- Enforcement is drop-based: a blocked connection keeps retransmitting
-  (`policy/README.md`). Experiment 3 counts connections, not events.
+**Discussion.** A field flagged complete but wrong would let enforce mode
+block or pass a connection on false data. The expected count is zero. Any case above zero is
+explained from the code.
 
-## Layout and order
+**Limitation.** `parse.py` is a second parser. Disagreements are checked by
+hand against the hex bytes.
 
-```
-eval/
-  PLAN.md            this file
-  census/            done
-  coverage/          experiment 1: run.sh, analyze.py, results/<run>/
-  accuracy/          experiment 2
-  cost/              experiment 3
-```
+---
 
-Order: 1, then 2, then 3. Experiment 1 carries the contribution and reuses
-the census clients; 2 reuses 1's data at MTU 1500; 3 is independent.
+## Experiment 4. Fragmentation coverage (the research contribution)
 
-Harnesses are written and checked like the verifiers, but campaigns are run
-by hand, not by the development loop: a loop that retries until numbers
-look right is how results get fabricated.
+**Objective.** Measure how much of each ClientHello the first TCP segment
+carries, and whether a version policy can still be judged.
 
-## Needs from the author
+**Method.** The census clients at MTU 1500 and MTU 1280, 20 connections
+each, skbouncer on the client's veth. First check that the veth's
+`gso_size` follows the network MTU. If it does not, drop the 1280 arm and
+state why.
 
-- Approve or change: the MTU list, sample sizes, hypotheses, and whether
-  the real-browser subset is worth the setup.
-- Once per session, for experiment 3: `sudo sysctl -w kernel.bpf_stats_enabled=1`
-  (or add it to the sudoers rule).
-- Delete the `pre-M6` VMware snapshot before experiment 3.
+**Hypotheses, stated before the run.**
+- H1. Every post-quantum ClientHello is split at both MTUs. No classical one
+  is split.
+- H2. Whether `supported_versions` is in the first segment depends on the
+  client's extension order and not on the MTU.
+- H3. The cipher list is always in the first segment.
+
+**Results.** One table per MTU (record length, bytes seen, versions
+complete). One bar chart of the share of connections with a decidable
+verdict, per client.
+
+**Discussion.** Compare the measurement with the census model. Explain H2
+from the extension order of each client. State what this means for any
+per-packet observer, CryptoMon included.
+
+---
+
+## Experiment 5. Runtime cost
+
+**Objective.** Measure the handshake cost of running skbouncer.
+
+**Method.** `openssl s_time -new -time 30` against the server container.
+Three conditions (off, audit, enforce), alternating, 10 runs each. With
+`kernel.bpf_stats_enabled=1`, also read the program's run time per call from
+`bpftool prog show`.
+
+**Results.** Median connections per second per condition and the change
+from off. Mean nanoseconds per program call.
+
+**Limitation.** One 2-CPU VM. The percentage change is the claim, and the
+absolute figures apply to this machine only.
+
+---
+
+## Experiment 6. Usability (subjective)
+
+**Objective.** Judge the command-line interface against a recognised set of
+usability heuristics and against the opinion of possible operators.
+
+**Method, part A.** Heuristic evaluation against Nielsen's ten usability
+heuristics [Nielsen-1994, verify before use]. One row per heuristic, with the
+skbouncer feature that meets it or fails it. Examples from the built tool:
+the exit counters (visibility of system status), `TLS 1.3` and cipher names in
+place of hex (match with the real world), refusal of the root cgroup (error
+prevention), a load error on a misspelt cipher name (help with errors).
+
+**Method, part B.** User survey. 20 to 30 respondents with an IT background.
+Respondents cannot run a kernel tool, so the survey opens with a two minute
+screen recording of skbouncer in audit and enforce mode. Ten questions from
+the survey pool, covering the functions, the purpose, the interface, and one
+open feedback question. Likert scale for the measurable questions.
+
+**Results.** One chart per measurable question. The open answers grouped by
+theme.
+
+**Conclusion.** Three to five points drawn from the survey.
+
+---
+
+## Chapter conclusion
+
+One section after experiment 6 that draws the six individual conclusions
+into an overall conclusion.
+
+---
+
+## Schedule (today is Wed 30 Sep)
+
+| Date | Work |
+|---|---|
+| Wed 30 Sep to Thu 1 Oct | Harnesses for experiments 3, 4 and 5. Tag `eval-1`. Record the screen recording. Build the survey. |
+| Fri 2 Oct | Survey goes out. |
+| Fri 2 to Sun 4 Oct | Run experiments 1, 3, 4 and 5. |
+| Mon 5 to Sun 11 Oct | Write chapter 4. Experiment 2 and part A of experiment 6 are desk work. Survey closes Sun 11 Oct. |
+| Mon 12 to Sun 18 Oct | Survey charts, revision of the whole report. |
+| Mon 19 Oct | Submit. |
+
+If time runs short, drop the 1280 arm of experiment 4 and the `bpf_stats`
+reading in experiment 5.
+
+---
+
+## Rules for the harnesses
+
+The development loop writes and checks the harnesses. A campaign runs by
+hand. A loop that retries until the numbers pass would fabricate results.
