@@ -36,9 +36,9 @@ a measurement and discussed without a pass mark.
 | C5 | Version accuracy | Exact matches among version lists flagged complete | 100% | 3 |
 | C6 | False certainty | Fields flagged complete that differ from the server's decode | 0 | 3 |
 | C7 | Container attribution | Events carrying the correct container name | 100% | 3 |
-| C8 | Truncation reporting | Split ClientHellos flagged as split | 100% | 4 |
+| C8 | Truncation reporting | ClientHellos flagged split, against the server's record length + 5 > MSS | 100% of split flagged, none that fit | 4 |
 | C9 | Fragmentation coverage | Share of connections with a decidable version verdict, per client and MTU | None, tested against H1 to H3 | 4 |
-| C10 | Verdict agreement | skbouncer's verdict equal to a reference verdict from the server's decode | 100% | 3 |
+| C10 | Verdict agreement | Among `allow` and `violation` verdicts, those equal to a reference verdict from the server's decode | 100% | 3 |
 | C11 | Enforcement accuracy | Violating ClientHellos blocked, compliant ClientHellos passed | 100% blocked, 0 compliant blocked | 1 |
 | C12 | Safe failure | Fail open on `unknown`, refuse the root cgroup, detach on exit | All hold | 1 |
 | C13 | Handshake overhead | Change in connections per second against skbouncer off | Under 5% | 5 |
@@ -54,10 +54,14 @@ and are set now so the results cannot move them.
 ## Before any run
 
 - Tag the measured commit `eval-1`. No code changes after the tag.
-- Kernel 7.0.0-31-generic (held). No VM suspend during a run.
-- Save `env.json` with every result set. It records the skbouncer version,
-  the kernel, the client and server OpenSSL versions, the Docker version, the
-  network MTU and the `ethtool -k` offload state of the veth under test.
+- Every experiment runs on the EC2 instance: c7i.2xlarge, ap-southeast-1,
+  Ubuntu 26.04.1, kernel 7.0.0-1013-aws (held). Harnesses are built and
+  checked on the development VM, which has the same toolchain and identical
+  container images, then run on EC2 from the tag.
+- Every result set carries `env.txt` from `eval/env.sh`: the skbouncer
+  version and commit, kernel, toolchain and library versions, image ids,
+  OpenSSL version, MTUs, the `ethtool -k` offloads of the veth under test,
+  and clock sync.
 
 ---
 
@@ -68,8 +72,9 @@ and are set now so the results cannot move them.
 **Criteria.** C1, C3, C11, C12.
 
 **Method.** Run `scripts/verify-M6.6.sh`, which reruns the M3 to M6.5
-verifiers. Map each verifier case to one row of the table below. Add one
-control row with skbouncer stopped.
+verifiers. Map each verifier case to one row of the table below. Row 14,
+the control with skbouncer stopped, is not in the verifiers; experiment 1's
+harness adds it.
 
 | No | Function | Input | Expected |
 |---|---|---|---|
@@ -78,14 +83,14 @@ control row with skbouncer stopped.
 | 3 | Read the cipher suites | Forced cipher list | Same list, GREASE removed |
 | 4 | Read the versions | TLS 1.2 only, TLS 1.3 | Versions from `supported_versions` |
 | 5 | Flag a split ClientHello | Post-quantum ClientHello | Bytes seen below record length |
-| 6 | Name the container | Two containers at once | Correct name on each event |
+| 6 | Name the container | Two containers at once; two sharing one network namespace | Correct name on each event, told apart by cgroup id |
 | 7 | Audit a violation | TLS 1.2 client, policy minimum 1.3 | `violation`, handshake completes |
 | 8 | Enforce a violation | Same, `--mode enforce` | Server never receives the ClientHello |
 | 9 | Fail open | Versions cut off, `on_unknown` allow | `unknown`, handshake completes |
 | 10 | Block unknown on request | Same, `on_unknown` block | Server never receives the ClientHello |
 | 11 | Refuse the root cgroup | `--cgroup /sys/fs/cgroup` | Refused with a message |
-| 12 | Refuse a non-veth in enforce mode | `-i ens33 --mode enforce` | Refused with a message |
-| 13 | Detach on exit | Kill with SIGINT and SIGPIPE | No program left attached |
+| 12 | Refuse a non-veth in enforce mode | `-i lo --mode enforce` | Refused with a message |
+| 13 | Detach on exit | Exit on SIGINT; die on SIGPIPE, SIGHUP, and an unhandled SIGUSR2 standing in for a crash | No program left attached |
 | 14 | Control | Row 8 with skbouncer stopped | Handshake completes |
 
 **Results.** The table with a Result column and PASS or FAIL.
@@ -93,7 +98,8 @@ control row with skbouncer stopped.
 **Discussion.** Link each row to the part of the design that makes it pass.
 Row 8 against row 7 shows the kernel dropping the ClientHello. Row 14 shows
 the block in row 8 came from skbouncer. Row 13 covers the process owning the
-tcx link.
+tcx link, and the SIGUSR2 case shows it holds when skbouncer cannot clean
+up.
 
 ---
 
@@ -135,8 +141,8 @@ the client sent.
 
 **Criteria.** C2, C4, C5, C6, C7, C10.
 
-**Method.** The census clients at MTU 1500, 10 connections each, plus two
-edge cases (TLS 1.2 only, an 83-cipher list). Ground truth is the server's
+**Method.** `eval/collect.sh` with the census clients at MTU 1500, 10
+connections each, plus two edge cases (TLS 1.2 only, an 83-cipher list). Ground truth is the server's
 own decode of the bytes it received (`openssl s_server -msg`, parsed by
 `eval/census/parse.py`). Compare record length, legacy version, cipher list
 in order and versions. Compare the container name on each event with the
@@ -147,9 +153,14 @@ skbouncer's verdict.
 **Results.** One table with one row per criterion (C2, C4, C5, C6, C7,
 C10), the count, the total and the target.
 
+`unknown` verdicts are not scored here: they are counted for C9. A decided
+verdict that disagrees with the reference can only come from a field flagged
+complete that is wrong, so it also counts against C6.
+
 **Discussion.** A field flagged complete but wrong would let enforce mode
 block or pass a connection on false data. The expected count is zero. Any case above zero is
-explained from the code.
+explained from the code. An `unknown` where the reference says `violation`
+is the fail-open design, not an error.
 
 **Limitation.** `parse.py` is a second parser. Disagreements are checked by
 hand against the hex bytes.
@@ -163,10 +174,14 @@ carries, and whether a version policy can still be judged.
 
 **Criteria.** C8, C9.
 
-**Method.** The census clients at MTU 1500 and MTU 1280, 20 connections
-each, skbouncer on the client's veth. First check that the veth's
-`gso_size` follows the network MTU. If it does not, drop the 1280 arm and
-state why.
+**Method.** `eval/collect.sh` with the census clients at MTU 1500 and MTU
+1280, 20 connections each, skbouncer on the client's veth. Ground truth for
+"split" does not come from skbouncer: the record length from the server's
+decode, plus the 5-byte record header, against the MSS the collector
+measures with `getsockopt(TCP_MAXSEG)` in the client's namespace. Checked
+while building the harness: at MTU 1500, 1280 and with TCP timestamps off, a
+split ClientHello showed exactly MSS − 5 record bytes, so the network MTU
+sets the segment skbouncer sees.
 
 **Hypotheses, stated before the run.**
 - H1. Every post-quantum ClientHello is split at both MTUs. No classical one
@@ -181,7 +196,11 @@ verdict, per client.
 
 **Discussion.** Compare the measurement with the census model. Explain H2
 from the extension order of each client. State what this means for any
-per-packet observer, CryptoMon included.
+per-packet observer, CryptoMon included. Add the ServerHello result from
+the census (`eval/census/serverhello.py`): the negotiated cipher and version
+end within the first 87 bytes of every ServerHello measured, so a ServerHello
+reader would recover the version where the offer is cut. One server
+implementation (OpenSSL); future work.
 
 ---
 
@@ -191,17 +210,26 @@ per-packet observer, CryptoMon included.
 
 **Criteria.** C13, C14, C15.
 
-**Method.** `openssl s_time -new -time 30` against the server container.
-Three conditions (off, audit, enforce), alternating, 10 runs each. With
-`kernel.bpf_stats_enabled=1`, also read the program's run time per call from
-`bpftool prog show`. Read the dropped-event counter that skbouncer prints on
-exit after each audit and enforce run.
+**Method.** `eval/cost.sh`: `openssl s_time -new -time 30` against the
+server container. Three conditions (off, audit, enforce), 10 rounds, the
+order rotated each round. Server, client and skbouncer each on their own
+physical core. The policy lists every cipher `s_time` offers, so enforce
+mode runs the full check and blocks nothing. The throughput rounds run with
+`bpf_stats` off, since timing every call slows the program; C14 comes from a
+separate short pass with `kernel.bpf_stats_enabled=1`. Read the
+dropped-event counter that skbouncer prints on exit after each audit and
+enforce run.
 
 **Results.** Median connections per second per condition and the change
 from off. Mean nanoseconds per program call. Dropped events per run.
 
-**Limitation.** One 2-CPU VM. The percentage change is the claim, and the
-absolute figures apply to this machine only.
+**Limitation.** One EC2 instance, client and server on the same host. The
+percentage change is the claim, and the absolute figures apply to this
+machine only. Each handshake costs over a millisecond of CPU and the program
+well under a microsecond per packet, so C13 is expected to pass by a wide
+margin; the discussion says so rather than presenting it as close. C14 is a
+mean over every packet the client sends (about six per connection), not
+over ClientHellos alone.
 
 ---
 
