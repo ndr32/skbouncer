@@ -172,6 +172,7 @@ Semantics and limits are in `policy/README.md`.
 | `scripts/verify-M*.sh`, `tests/check_*.py` | One verifier per milestone. Each sets up containers, runs skbouncer, and checks the result against an independent source (the TLS server's own log, `bpftool`). `verify-M6.6.sh` reruns the chain from M3. |
 | `tests/tls/Dockerfile` | The pinned OpenSSL 3.5.8 test image. |
 | `eval/census/` | ClientHello sizes and split points across 24 real clients, measured from the server's side. |
+| `eval/functional.sh` | Experiment 1: the verifier chain as the 14-row functional table, plus the control run and non-TLS traffic. |
 | `eval/collect.sh` | Runs clients with skbouncer watching; saves events and ground truth. For parse accuracy and fragmentation coverage. |
 | `eval/cost.sh` | Handshake throughput with skbouncer off, in audit and in enforce mode. |
 | `eval/env.sh` | Records the environment every result depends on. |
