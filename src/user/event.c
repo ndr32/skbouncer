@@ -10,7 +10,8 @@
 #include "event.h"
 #include "policy.h"
 
-/* inet_ntop() into a caller slot: two calls per line need two buffers. */
+/* inet_ntop() into a buffer from the caller. One line holds two addresses
+ * and needs two buffers. */
 static const char *ip4(char buf[INET_ADDRSTRLEN], uint32_t be_addr)
 {
 	struct in_addr a = { .s_addr = be_addr };
@@ -23,7 +24,7 @@ const char *skb_direction_name(uint8_t dir)
 	return dir == SKB_DIR_INGRESS ? "ingress" : "egress";
 }
 
-/* Short enough to stay in one column. Also the JSON `trunc` values. */
+/* Names short enough for one column. They are also the JSON `trunc` values. */
 static const char *trunc_name(uint8_t reason)
 {
 	switch (reason) {
@@ -40,7 +41,8 @@ static const char *action_name(uint8_t a)
 	return a == SKB_ACTION_BLOCK ? "block" : "pass";
 }
 
-/* ktime_ns is CLOCK_MONOTONIC; shift it by the clocks' current offset. */
+/* ktime_ns is CLOCK_MONOTONIC. The wall clock time adds the current offset
+ * between the two clocks. */
 static struct timespec wall_time(uint64_t ktime_ns)
 {
 	struct timespec mono, real;
@@ -65,8 +67,9 @@ void skb_event_header(FILE *out, bool verdict, bool action)
 		verdict ? " REASON" : "");
 }
 
-/* "1.3,1.2", GREASE skipped; the legacy version if the walk proved there
- * was no supported_versions, "?" if it could not tell. */
+/* Writes the versions as "1.3,1.2", skipping GREASE. Without
+ * supported_versions it writes the legacy version if the walk proved the
+ * extension absent, and "?" otherwise. */
 static void format_versions(const struct skb_event *ev, char *buf, size_t len)
 {
 	char vb[8];
@@ -85,8 +88,8 @@ static void format_versions(const struct skb_event *ev, char *buf, size_t len)
 			 skb_version_name(ev->legacy_version, vb) : "?");
 }
 
-/* The first real offer by name, then a count: a full list would not fit on
- * a line. A trailing + means the list was capped. */
+/* Writes the first real offer by name and then a count of the rest. A full
+ * list would not fit on a line. A trailing + means the list was capped. */
 static void format_ciphers(const struct skb_event *ev, char *buf, size_t len)
 {
 	unsigned shown = 0;
@@ -97,12 +100,16 @@ static void format_ciphers(const struct skb_event *ev, char *buf, size_t len)
 		uint16_t c = ntohs(ev->ciphers[i]);
 		const char *name;
 
-		if (skb_cipher_ignored(c) || shown++)
+		if (skb_cipher_ignored(c))
 			continue;
-		if ((name = skb_cipher_name(c)))
-			snprintf(buf, len, "%s", name);
-		else
-			snprintf(buf, len, "0x%04x", c);
+		if (shown == 0) {
+			name = skb_cipher_name(c);
+			if (name)
+				snprintf(buf, len, "%s", name);
+			else
+				snprintf(buf, len, "0x%04x", c);
+		}
+		shown++;
 	}
 	if (!shown)
 		snprintf(buf, len, "-");
@@ -112,9 +119,6 @@ static void format_ciphers(const struct skb_event *ev, char *buf, size_t len)
 			 ev->ciphers_capped ? "+" : "");
 }
 
-/* The cgroup id, not the veth, identifies the container: containers sharing
- * a network namespace share one veth. It is 0 for anything forwarded,
- * which is every bridged container at a physical interface. */
 void skb_event_print(FILE *out, const struct skb_event *ev, const char *container,
 		     const char *verdict, const char *reason)
 {
@@ -208,8 +212,8 @@ void skb_event_print_json(FILE *out, const struct skb_event *ev,
 		json_object_set_new(o, "verdict", json_string(verdict));
 	if (reason)
 		json_object_set_new(o, "reason", json_string(reason));
-	/* The kernel only judges in enforce mode, where action is set, and
-	 * only in scope; elsewhere kernel_verdict is null. */
+	/* The kernel judges in enforce mode only, where action is set, and
+	 * only in scope. Elsewhere kernel_verdict is null. */
 	if (ev->action) {
 		json_object_set_new(o, "action", json_string(action_name(ev->action)));
 		json_object_set_new(o, "kernel_verdict", ev->verdict == SKB_VERDICT_NONE ?

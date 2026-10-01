@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
-/* JSON policy and audit verdicts. Format and semantics: policy/README.md. */
+/* Loads the JSON policy and gives verdicts. policy/README.md defines the
+ * format and the verdict rules. */
 #include <arpa/inet.h>
 #include <fnmatch.h>
 #include <stdbool.h>
@@ -27,8 +28,8 @@ struct skb_policy {
 	size_t n_rules;
 };
 
-/* IANA TLS Cipher Suites registry, the names in current use. Anything else
- * can be given as hex. */
+/* Names from the IANA TLS Cipher Suites registry that are in current use.
+ * Other cipher suites can be given in hex. */
 static const struct { const char *name; uint16_t id; } cipher_names[] = {
 	{ "TLS_AES_128_GCM_SHA256",                        0x1301 },
 	{ "TLS_AES_256_GCM_SHA384",                        0x1302 },
@@ -146,24 +147,41 @@ static bool parse_version(const char *s, uint16_t *out)
 	return false;
 }
 
-/* Rejected rather than ignored: a misspelt "min_versoin" would otherwise
- * loosen the rule without a word. */
+/* Reports an unknown key as an error. A misspelt "min_versoin" would
+ * otherwise loosen the rule without warning. */
 static bool only_keys(json_t *obj, const char *const *keys, const char **bad)
 {
 	const char *k;
 	json_t *v;
 
 	json_object_foreach(obj, k, v) {
-		int i;
+		bool known = false;
 
-		for (i = 0; keys[i] && strcmp(k, keys[i]); i++)
-			;
-		if (!keys[i]) {
+		for (int i = 0; keys[i]; i++)
+			if (strcmp(k, keys[i]) == 0)
+				known = true;
+		if (!known) {
 			*bad = k;
 			return false;
 		}
 	}
 	return true;
+}
+
+/* Reads an optional key whose value must be `no` or `yes`. Sets *on for
+ * `yes` and leaves *on unchanged when the key is absent. */
+static bool read_choice(json_t *obj, const char *key, const char *no,
+			const char *yes, bool *on)
+{
+	json_t *v = json_object_get(obj, key);
+	const char *s;
+
+	if (!v)
+		return true;
+	s = json_is_string(v) ? json_string_value(v) : "";
+	if (strcmp(s, yes) == 0)
+		*on = true;
+	return strcmp(s, yes) == 0 || strcmp(s, no) == 0;
 }
 
 #define FAIL(...) do { snprintf(errbuf, errlen, __VA_ARGS__); goto err; } while (0)
@@ -246,27 +264,12 @@ struct skb_policy *skb_policy_load(const char *path, char *errbuf, size_t errlen
 	if (!json_is_integer(v) || json_integer_value(v) != 1)
 		FAIL("%s: \"version\" must be 1", path);
 
-	/* Omitted means deny: a policy is there to restrict. */
-	v = json_object_get(root, "default");
-	if (v) {
-		const char *d = json_is_string(v) ? json_string_value(v) : "";
-
-		if (strcmp(d, "allow") == 0)
-			pol->default_allow = true;
-		else if (strcmp(d, "deny") != 0)
-			FAIL("%s: \"default\" must be \"allow\" or \"deny\"", path);
-	}
-
-	/* Omitted means allow: never block on data not seen. */
-	v = json_object_get(root, "on_unknown");
-	if (v) {
-		const char *d = json_is_string(v) ? json_string_value(v) : "";
-
-		if (strcmp(d, "block") == 0)
-			pol->unknown_block = true;
-		else if (strcmp(d, "allow") != 0)
-			FAIL("%s: \"on_unknown\" must be \"allow\" or \"block\"", path);
-	}
+	/* Without "default" the policy denies. Without "on_unknown" it allows,
+	 * so skbouncer never blocks on bytes it did not see. */
+	if (!read_choice(root, "default", "deny", "allow", &pol->default_allow))
+		FAIL("%s: \"default\" must be \"allow\" or \"deny\"", path);
+	if (!read_choice(root, "on_unknown", "allow", "block", &pol->unknown_block))
+		FAIL("%s: \"on_unknown\" must be \"allow\" or \"block\"", path);
 
 	v = json_object_get(root, "rules");
 	if (v) {
@@ -330,8 +333,9 @@ const char *skb_version_name(uint16_t v, char buf[8])
 
 #define WHY(...) do { if (why) snprintf(why, len, __VA_ARGS__); } while (0)
 
-/* Something seen breaks the rule: violation, however much is unseen.
- * Nothing seen does, but a constrained list is partial: unknown. */
+/* One offer that breaks the rule is a violation, however much of the
+ * ClientHello went unseen. With no such offer and a constrained list seen
+ * only in part, the verdict is unknown. */
 enum skb_verdict skb_policy_explain(const struct skb_policy *pol,
 				    const struct skb_event *ev,
 				    const char *container, char *why, size_t len)
@@ -357,8 +361,11 @@ enum skb_verdict skb_policy_explain(const struct skb_policy *pol,
 		for (unsigned i = 0; i < ev->n_ciphers && i < SKB_MAX_CIPHERS; i++) {
 			uint16_t c = ntohs(ev->ciphers[i]);
 
-			if (!skb_cipher_ignored(c) && !cipher_permitted(r, c) && !n_bad++)
+			if (skb_cipher_ignored(c) || cipher_permitted(r, c))
+				continue;
+			if (n_bad == 0)
 				bad = c;
+			n_bad++;
 		}
 		part_c = !(ev->seen & SKB_SEEN_CIPHERS);
 	}
@@ -380,7 +387,8 @@ enum skb_verdict skb_policy_explain(const struct skb_policy *pol,
 		part_v = !(ev->seen & SKB_SEEN_VERSIONS);
 	}
 
-	/* Every broken limit is named, so fixing one does not reveal another. */
+	/* The reason names every limit the ClientHello breaks, so fixing one
+	 * does not reveal another. */
 	if (low || n_bad) {
 		if (why && low)
 			n += snprintf(why, len, "offers TLS %s, minimum is %s",
@@ -426,7 +434,8 @@ bool skb_policy_blocks_unknown(const struct skb_policy *pol)
 	return pol->unknown_block;
 }
 
-/* Must decide exactly as skb_policy_explain() does; the kernel mirrors it. */
+/* Must decide exactly as skb_policy_explain() does. The kernel copy,
+ * check_policy(), must agree as well. */
 void skb_policy_compile(const struct skb_policy *pol, unsigned slot,
 			struct skb_krule *out)
 {

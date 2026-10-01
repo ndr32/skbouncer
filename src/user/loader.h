@@ -15,8 +15,8 @@ struct skb_loader_opts {
 	enum skb_direction direction;	/* which tcx hook on that device */
 	bool verbose;
 
-	/* Enforce mode: block within the cgroup scope_id, at scope_level in
-	 * the hierarchy, and its descendants. */
+	/* Enforce mode. Blocks within the cgroup scope_id, at depth
+	 * scope_level, and the cgroups below it. */
 	bool enforce;
 	bool unknown_block;
 	uint64_t scope_id;
@@ -27,19 +27,20 @@ struct skb_loader_opts {
 	void *ctx;
 };
 
-/* Loads; attaching is a separate step so that enforce mode can fill the
- * policy maps first. */
+/* Loads the program. Attaching is a separate step, so enforce mode can fill
+ * the policy maps first. */
 struct skb_loader *skb_loader_open(const struct skb_loader_opts *opts);
 int skb_loader_attach(struct skb_loader *ldr, const char *ifname,
 		      enum skb_direction dir);
 
-/* The compiled policy. Return 0 or a negative errno. */
+/* The compiled policy. Each returns 0 or a negative errno. */
 int skb_loader_set_rule(struct skb_loader *ldr, uint32_t slot,
 			const struct skb_krule *rule);
 int skb_loader_set_cgroup(struct skb_loader *ldr, uint64_t cgroup_id,
 			  uint32_t slot);
 int skb_loader_del_cgroup(struct skb_loader *ldr, uint64_t cgroup_id);
-/* Walks cgroup_rule's keys: prev NULL for the first. -ENOENT past the last. */
+/* Walks the keys of cgroup_rule. prev is NULL for the first key, and -ENOENT
+ * means the walk is past the last. */
 int skb_loader_next_cgroup(struct skb_loader *ldr, const uint64_t *prev,
 			   uint64_t *next);
 /* Reads the kernel-side counters into out[0..SKB_STAT__MAX). `n` is the
@@ -47,7 +48,7 @@ int skb_loader_next_cgroup(struct skb_loader *ldr, const uint64_t *prev,
 int skb_loader_stats(const struct skb_loader *ldr, uint64_t *out, size_t n);
 
 /* Drains the ringbuf. Returns the number of records handled, or a negative
- * errno; -EINTR just means a signal arrived. */
+ * errno. -EINTR means a signal arrived. */
 int skb_loader_poll(struct skb_loader *ldr, int timeout_ms);
 
 void skb_loader_close(struct skb_loader *ldr);

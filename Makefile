@@ -1,8 +1,8 @@
-# skbouncer - build
+# skbouncer build
 #
-# src/bpf/vmlinux.h is committed and is NOT regenerated here. The
-# fragmentation results are kernel-sensitive, so the BTF snapshot stays
-# pinned to the kernel recorded in CLAUDE.md.
+# src/bpf/vmlinux.h is committed and is not regenerated here. Fragmentation
+# results depend on the kernel, so the BTF snapshot stays pinned to the
+# kernel recorded in CLAUDE.md.
 
 CLANG   ?= clang
 BPFTOOL ?= bpftool
@@ -26,8 +26,8 @@ VERSION := $(shell git describe --always --dirty 2>/dev/null || echo unknown)
 CFLAGS  := -g -O2 -Wall -Wextra -Wno-unused-parameter
 LDLIBS  := -lbpf -lelf -lz -lcurl -ljansson
 
-# -Wno-missing-declarations: vmlinux.h emits bare forward declarations for
-# anonymous types, which would otherwise bury real warnings.
+# vmlinux.h emits bare forward declarations for anonymous types.
+# -Wno-missing-declarations keeps them from burying real warnings.
 BPF_CFLAGS := -target bpf -D__TARGET_ARCH_$(ARCH) -g -O2 -Wall \
               -Wno-missing-declarations \
               -Iinclude -Isrc/bpf
@@ -43,8 +43,8 @@ $(BPF_OBJ): $(BPF_SRC) src/bpf/vmlinux.h include/skbouncer.h | $(BUILD)
 $(SKEL): $(BPF_OBJ)
 	$(BPFTOOL) gen skeleton $< > $@
 
-# Checked on every build, rewritten only when the version changes: a new commit
-# rebuilds main.o, and an unchanged tree rebuilds nothing.
+# Checked on every build and rewritten only when the version changes. A new
+# commit rebuilds main.o, and an unchanged tree rebuilds nothing.
 $(BUILD)/version.h: FORCE | $(BUILD)
 	@v='#define SKB_VERSION "$(VERSION)"'; \
 	[ "$$(cat $@ 2>/dev/null)" = "$$v" ] || echo "$$v" >$@

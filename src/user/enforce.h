@@ -11,18 +11,19 @@
 #include "policy.h"
 
 /* The cgroup v2 id and depth of `path`, as bpf_skb_ancestor_cgroup_id()
- * wants them. Refuses the root however it is spelt. */
+ * wants them. Refuses the root cgroup however the path spells it. */
 int skb_enforce_scope(const char *path, uint64_t *id, uint32_t *level,
 		      char *errbuf, size_t errlen);
 
-/* True if `ifname` is driven by veth, the only place enforce mode attaches. */
+/* True if the veth driver runs `ifname`. Enforce mode attaches to veths
+ * only. */
 bool skb_enforce_is_veth(const char *ifname);
 
-/* Writes every rule on the first call. Then points each cgroup in `scope`,
- * the --cgroup directory and those below it, at the rule its container
- * matches, and removes every other cgroup from the kernel map: out of
- * scope nothing is blocked, and a cgroup gone from the tree is gone for
- * good. Returns 0 or a negative errno. */
+/* Writes every rule on the first call. Each call then points every cgroup in
+ * `scope` (the --cgroup directory and the cgroups below it) at the rule its
+ * container matches, and removes all other cgroups from the kernel map.
+ * Nothing out of scope is blocked, and a removed cgroup never returns.
+ * Returns 0 or a negative errno. */
 int skb_enforce_sync(struct skb_loader *ldr, const struct skb_policy *pol,
 		     struct skb_container_map *containers, const char *scope);
 

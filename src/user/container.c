@@ -1,18 +1,16 @@
 // SPDX-License-Identifier: GPL-2.0
-/*
- * cgroup id -> Docker container name.
+/* Maps a cgroup id to a Docker container name.
  *
- * A container's cgroup v2 id is the inode of its cgroup directory, so the
- * map is built by asking dockerd for every container id (Engine API on the
- * unix socket, no CLI) and stat()ing the cgroup directory each id implies.
- * Nested cgroups a container creates under its own are mapped too.
+ * A container's cgroup v2 id is the inode of its cgroup directory. The map
+ * is built by asking dockerd for every container id over the Engine API on
+ * its unix socket, then running stat() on the cgroup directory each id
+ * implies. Nested cgroups that a container creates under its own are mapped
+ * too.
  *
- * cgroup ids are not reused within a boot, so an entry never goes stale:
- * entries are kept after their container exits, which lets a late event
- * from a just-removed container still resolve. For the same reason a
- * cgroup found to be no container stays that way, and is cached as a miss
- * so host traffic does not make every event cost a round trip to dockerd.
- */
+ * cgroup ids are not reused within a boot, and an entry never goes stale.
+ * Entries stay after their container exits, and a late event from a removed
+ * container still resolves. A cgroup found to belong to no container is
+ * cached as a miss, so host traffic does not send every event to dockerd. */
 #include <dirent.h>
 #include <errno.h>
 #include <net/if.h>
@@ -28,7 +26,6 @@
 #include <jansson.h>
 
 #define DOCKER_SOCK	"/var/run/docker.sock"
-#define CGROUP_ROOT	"/sys/fs/cgroup"
 #define RESP_MAX	(8 << 20)
 #define NESTED_DEPTH	4
 #define MISS_SLOTS	256
@@ -41,7 +38,7 @@ struct entry {
 struct skb_container_map {
 	struct entry *v;
 	size_t n, cap;
-	uint64_t miss[MISS_SLOTS];	/* ring; 0 = empty slot */
+	uint64_t miss[MISS_SLOTS];	/* ring buffer, 0 marks an empty slot */
 	unsigned miss_next;
 };
 
@@ -97,9 +94,8 @@ static int put(struct skb_container_map *m, uint64_t id, const char *name)
 	return 0;
 }
 
-/* The cgroup at `path` and those nested under it, bounded in depth. */
-static void put_tree(struct skb_container_map *m, const char *path,
-		     const char *name, int depth)
+void skb_cgroup_walk(const char *path, int max_depth,
+		     void (*fn)(uint64_t id, void *ctx), void *ctx)
 {
 	struct stat st;
 	struct dirent *d;
@@ -107,19 +103,33 @@ static void put_tree(struct skb_container_map *m, const char *path,
 
 	if (stat(path, &st) != 0 || !S_ISDIR(st.st_mode))
 		return;
-	put(m, st.st_ino, name);
-	if (depth >= NESTED_DEPTH || !(dir = opendir(path)))
+	fn(st.st_ino, ctx);
+	if (max_depth == 0)
+		return;
+	dir = opendir(path);
+	if (!dir)
 		return;
 	while ((d = readdir(dir))) {
 		char sub[4096];
 
 		if (d->d_type != DT_DIR || d->d_name[0] == '.')
 			continue;
-		if (snprintf(sub, sizeof(sub), "%s/%s", path, d->d_name) <
-		    (int)sizeof(sub))
-			put_tree(m, sub, name, depth + 1);
+		if (snprintf(sub, sizeof(sub), "%s/%s", path, d->d_name) < (int)sizeof(sub))
+			skb_cgroup_walk(sub, max_depth - 1, fn, ctx);
 	}
 	closedir(dir);
+}
+
+struct named {
+	struct skb_container_map *m;
+	const char *name;
+};
+
+static void put_named(uint64_t id, void *ctx)
+{
+	struct named *n = ctx;
+
+	put(n->m, id, n->name);
 }
 
 struct body {
@@ -127,7 +137,7 @@ struct body {
 	size_t n;
 };
 
-/* curl's write callback: appends, and aborts past RESP_MAX. */
+/* curl's write callback. Appends to the body and aborts past RESP_MAX. */
 static size_t on_body(char *data, size_t size, size_t nmemb, void *ctx)
 {
 	struct body *b = ctx;
@@ -142,10 +152,10 @@ static size_t on_body(char *data, size_t size, size_t nmemb, void *ctx)
 	return len;
 }
 
-/* GET `path` from dockerd over its unix socket. Returns the parsed body on
- * a 200, else NULL, with *status the HTTP status, or 0 when dockerd gave no
- * answer. The timeout bounds how long a wedged dockerd can stall the event
- * loop. */
+/* Sends GET `path` to dockerd over its unix socket. Returns the parsed body
+ * on a 200 and NULL otherwise. *status gets the HTTP status, or 0 when
+ * dockerd gave no answer. The 1 s timeout bounds how long a stuck dockerd
+ * can stall the event loop. */
 static json_t *docker_json(const char *path, int *status)
 {
 	struct body b = {};
@@ -173,18 +183,19 @@ static json_t *docker_json(const char *path, int *status)
 	return root;
 }
 
-/* The container's cgroup directory: the systemd driver (this host), then
- * cgroupfs. An id with a / would escape CGROUP_ROOT. */
+/* Finds the container's cgroup directory, first in the systemd driver's
+ * layout (used on this host) and then in cgroupfs. An id containing / would
+ * escape SKB_CGROUP_ROOT. */
 static int cgroup_of(const char *id, char *path, size_t len)
 {
 	struct stat st;
 
 	if (strchr(id, '/'))
 		return -1;
-	snprintf(path, len, CGROUP_ROOT "/system.slice/docker-%s.scope", id);
+	snprintf(path, len, SKB_CGROUP_ROOT "/system.slice/docker-%s.scope", id);
 	if (stat(path, &st) == 0)
 		return 0;
-	snprintf(path, len, CGROUP_ROOT "/docker/%s", id);
+	snprintf(path, len, SKB_CGROUP_ROOT "/docker/%s", id);
 	return stat(path, &st) == 0 ? 0 : -1;
 }
 
@@ -207,15 +218,17 @@ int skb_container_refresh(struct skb_container_map *m)
 
 		if (!id || !name || cgroup_of(id, path, sizeof(path)))
 			continue;
-		put_tree(m, path, name[0] == '/' ? name + 1 : name, 0);
+		struct named n = { m, name[0] == '/' ? name + 1 : name };
+
+		skb_cgroup_walk(path, NESTED_DEPTH, put_named, &n);
 	}
 	json_decref(root);
 	return 0;
 }
 
-/* The host end of the veth whose peer is one of `pid`'s interfaces. The
- * container's own sysfs, reached through its root, lists its interfaces;
- * each one's iflink is the host-side peer's ifindex. */
+/* Finds the host end of the veth whose peer is an interface of `pid`. The
+ * container's sysfs, reached through its root directory, lists its
+ * interfaces. Each interface's iflink is the ifindex of its host-side peer. */
 static int host_veth(int pid, char *ifname, char *errbuf, size_t errlen)
 {
 	char dir[64], path[512], buf[32];
@@ -246,7 +259,8 @@ static int host_veth(int pid, char *ifname, char *errbuf, size_t errlen)
 			continue;
 		link = fgets(buf, sizeof(buf), f) ? strtoul(buf, NULL, 10) : 0;
 		fclose(f);
-		/* iflink == ifindex: no peer, as with --network host. */
+		/* iflink equal to ifindex means no peer, as with --network
+		 * host. */
 		if (!link || link == strtoul(own, NULL, 10) || !if_indextoname(link, host))
 			continue;
 		if (found++ == 0)
@@ -308,13 +322,14 @@ const char *skb_container_lookup(struct skb_container_map *m, uint64_t cgroup_id
 {
 	struct entry *e;
 
-	/* 0 is a forwarded skb with no socket: no cgroup to name. */
+	/* A cgroup id of 0 comes from a forwarded skb with no socket and
+	 * names nothing. */
 	if (cgroup_id == 0 || known_miss(m, cgroup_id))
 		return NULL;
 	if ((e = find(m, cgroup_id)))
 		return e->name;
-	/* Only a successful refresh proves a miss; if dockerd was down, ask
-	 * again next time. */
+	/* Only a successful refresh proves a miss. If dockerd did not
+	 * answer, the next lookup asks again. */
 	if (skb_container_refresh(m) != 0)
 		return NULL;
 	if ((e = find(m, cgroup_id)))
