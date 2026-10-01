@@ -142,9 +142,9 @@ the client sent.
 **Criteria.** C2, C4, C5, C6, C7, C10.
 
 **Method.** `eval/collect.sh` with the census clients at MTU 1500, 10
-connections each, plus two edge cases (TLS 1.2 only, an 83-cipher list). Ground truth is the server's
-own decode of the bytes it received (`openssl s_server -msg`, parsed by
-`eval/census/parse.py`). Compare record length, legacy version, cipher list
+connections each, plus two edge cases (TLS 1.2 only, an 83-cipher list).
+Ground truth is the server's own decode of the bytes it received
+(`openssl s_server -msg`, decoded by `eval/collect.py`). Compare record length, legacy version, cipher list
 in order and versions. Compare the container name on each event with the
 name of the container that ran the client. Compute a reference verdict from
 the server's decode under the example policy and compare it with
