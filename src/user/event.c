@@ -97,12 +97,16 @@ static void format_ciphers(const struct skb_event *ev, char *buf, size_t len)
 		uint16_t c = ntohs(ev->ciphers[i]);
 		const char *name;
 
-		if (skb_cipher_ignored(c) || shown++)
+		if (skb_cipher_ignored(c))
 			continue;
-		if ((name = skb_cipher_name(c)))
-			snprintf(buf, len, "%s", name);
-		else
-			snprintf(buf, len, "0x%04x", c);
+		if (shown == 0) {
+			name = skb_cipher_name(c);
+			if (name)
+				snprintf(buf, len, "%s", name);
+			else
+				snprintf(buf, len, "0x%04x", c);
+		}
+		shown++;
 	}
 	if (!shown)
 		snprintf(buf, len, "-");

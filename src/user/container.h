@@ -6,6 +6,13 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#define SKB_CGROUP_ROOT "/sys/fs/cgroup"
+
+/* Calls fn with the id of the cgroup at `path` and of every cgroup below it,
+ * down to max_depth levels. A cgroup's id is the inode of its directory. */
+void skb_cgroup_walk(const char *path, int max_depth,
+		     void (*fn)(uint64_t id, void *ctx), void *ctx);
+
 struct skb_container_map;
 
 struct skb_container_map *skb_container_map_new(void);

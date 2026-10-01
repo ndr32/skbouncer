@@ -169,30 +169,6 @@ static void usage(FILE *out, const char *argv0)
 		argv0, argv0);
 }
 
-/* Checked here, not at the attach site, so no future caller can skip it. */
-static bool cgroup_path_is_safe(const char *path, const char **why)
-{
-	static const char *const root_paths[] = {
-		"/sys/fs/cgroup", "/sys/fs/cgroup/", "/", NULL
-	};
-
-	if (!path || path[0] == '\0') {
-		*why = "empty path";
-		return false;
-	}
-	if (path[0] != '/') {
-		*why = "must be an absolute path";
-		return false;
-	}
-	for (int i = 0; root_paths[i]; i++) {
-		if (strcmp(path, root_paths[i]) == 0) {
-			*why = "refusing the root cgroup";
-			return false;
-		}
-	}
-	return true;
-}
-
 static int parse_args(int argc, char **argv, struct options *opt)
 {
 	static const struct option longopts[] = {
@@ -270,17 +246,10 @@ static int parse_args(int argc, char **argv, struct options *opt)
 /* After --container has filled in -i and --cgroup. */
 static int check_args(struct options *opt)
 {
-	const char *why = NULL;
-
 	/* Container traffic is ingress on the host end of its veth. */
 	if (!opt->direction_set && opt->ifname && skb_enforce_is_veth(opt->ifname))
 		opt->direction = SKB_DIR_INGRESS;
 
-	if (opt->cgroup_path && !cgroup_path_is_safe(opt->cgroup_path, &why)) {
-		fprintf(stderr, "skbouncer: unsafe --cgroup '%s': %s\n",
-			opt->cgroup_path, why);
-		return -1;
-	}
 	if (opt->mode != MODE_ENFORCE)
 		return 0;
 	if (!opt->cgroup_path) {

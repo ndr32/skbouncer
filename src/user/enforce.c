@@ -2,7 +2,6 @@
 /* Enforce mode: the policy compiled into the kernel's maps. The verdict has
  * to be reached in the kernel, since one reached here arrives after the
  * ClientHello has left. */
-#include <dirent.h>
 #include <errno.h>
 #include <limits.h>
 #include <linux/ethtool.h>
@@ -20,7 +19,6 @@
 
 #include "enforce.h"
 
-#define CGROUP_ROOT "/sys/fs/cgroup"
 #define SCOPE_DEPTH 8	/* nested cgroups followed below the scope */
 
 int skb_enforce_scope(const char *path, uint64_t *id, uint32_t *level,
@@ -40,14 +38,14 @@ int skb_enforce_scope(const char *path, uint64_t *id, uint32_t *level,
 		snprintf(errbuf, errlen, "--cgroup %s: not a cgroup v2 directory", path);
 		return -1;
 	}
-	if (strncmp(real, CGROUP_ROOT "/", sizeof(CGROUP_ROOT)) != 0) {
+	if (strncmp(real, SKB_CGROUP_ROOT "/", sizeof(SKB_CGROUP_ROOT)) != 0) {
 		snprintf(errbuf, errlen, "--cgroup %s: refusing the root cgroup, "
-			 "or one outside " CGROUP_ROOT, path);
+			 "or one outside " SKB_CGROUP_ROOT, path);
 		return -1;
 	}
 	/* The root is level 0; each component below it adds one. */
 	*level = 0;
-	for (p = real + sizeof(CGROUP_ROOT) - 1; *p; p++)
+	for (p = real + sizeof(SKB_CGROUP_ROOT) - 1; *p; p++)
 		if (*p == '/' && p[1])
 			(*level)++;
 	*id = st.st_ino;
@@ -83,28 +81,10 @@ static int cmp_u64(const void *a, const void *b)
 	return x < y ? -1 : x > y;
 }
 
-static void walk_scope(const char *path, int depth)
+static void add_to_scope(uint64_t id, void *ctx)
 {
-	struct dirent *d;
-	struct stat st;
-	DIR *dir;
-
-	if (n_scope >= SKB_MAX_CGROUPS || stat(path, &st) != 0 ||
-	    !S_ISDIR(st.st_mode))
-		return;
-	scope_ids[n_scope++] = st.st_ino;
-	if (depth >= SCOPE_DEPTH || !(dir = opendir(path)))
-		return;
-	while ((d = readdir(dir))) {
-		char sub[PATH_MAX];
-
-		if (d->d_type != DT_DIR || d->d_name[0] == '.')
-			continue;
-		if (snprintf(sub, sizeof(sub), "%s/%s", path, d->d_name) <
-		    (int)sizeof(sub))
-			walk_scope(sub, depth + 1);
-	}
-	closedir(dir);
+	if (n_scope < SKB_MAX_CGROUPS)
+		scope_ids[n_scope++] = id;
 }
 
 bool skb_enforce_in_scope(uint64_t cgroup_id)
@@ -142,7 +122,7 @@ int skb_enforce_sync(struct skb_loader *ldr, const struct skb_policy *pol,
 	}
 
 	n_scope = 0;
-	walk_scope(scope, 0);
+	skb_cgroup_walk(scope, SCOPE_DEPTH, add_to_scope, NULL);
 	qsort(scope_ids, n_scope, sizeof(*scope_ids), cmp_u64);
 	for (size_t i = 0; i < n_scope; i++) {
 		const char *name = skb_container_lookup(containers, scope_ids[i]);

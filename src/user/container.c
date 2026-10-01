@@ -28,7 +28,6 @@
 #include <jansson.h>
 
 #define DOCKER_SOCK	"/var/run/docker.sock"
-#define CGROUP_ROOT	"/sys/fs/cgroup"
 #define RESP_MAX	(8 << 20)
 #define NESTED_DEPTH	4
 #define MISS_SLOTS	256
@@ -97,9 +96,8 @@ static int put(struct skb_container_map *m, uint64_t id, const char *name)
 	return 0;
 }
 
-/* The cgroup at `path` and those nested under it, bounded in depth. */
-static void put_tree(struct skb_container_map *m, const char *path,
-		     const char *name, int depth)
+void skb_cgroup_walk(const char *path, int max_depth,
+		     void (*fn)(uint64_t id, void *ctx), void *ctx)
 {
 	struct stat st;
 	struct dirent *d;
@@ -107,19 +105,33 @@ static void put_tree(struct skb_container_map *m, const char *path,
 
 	if (stat(path, &st) != 0 || !S_ISDIR(st.st_mode))
 		return;
-	put(m, st.st_ino, name);
-	if (depth >= NESTED_DEPTH || !(dir = opendir(path)))
+	fn(st.st_ino, ctx);
+	if (max_depth == 0)
+		return;
+	dir = opendir(path);
+	if (!dir)
 		return;
 	while ((d = readdir(dir))) {
 		char sub[4096];
 
 		if (d->d_type != DT_DIR || d->d_name[0] == '.')
 			continue;
-		if (snprintf(sub, sizeof(sub), "%s/%s", path, d->d_name) <
-		    (int)sizeof(sub))
-			put_tree(m, sub, name, depth + 1);
+		if (snprintf(sub, sizeof(sub), "%s/%s", path, d->d_name) < (int)sizeof(sub))
+			skb_cgroup_walk(sub, max_depth - 1, fn, ctx);
 	}
 	closedir(dir);
+}
+
+struct named {
+	struct skb_container_map *m;
+	const char *name;
+};
+
+static void put_named(uint64_t id, void *ctx)
+{
+	struct named *n = ctx;
+
+	put(n->m, id, n->name);
 }
 
 struct body {
@@ -174,17 +186,17 @@ static json_t *docker_json(const char *path, int *status)
 }
 
 /* The container's cgroup directory: the systemd driver (this host), then
- * cgroupfs. An id with a / would escape CGROUP_ROOT. */
+ * cgroupfs. An id with a / would escape SKB_CGROUP_ROOT. */
 static int cgroup_of(const char *id, char *path, size_t len)
 {
 	struct stat st;
 
 	if (strchr(id, '/'))
 		return -1;
-	snprintf(path, len, CGROUP_ROOT "/system.slice/docker-%s.scope", id);
+	snprintf(path, len, SKB_CGROUP_ROOT "/system.slice/docker-%s.scope", id);
 	if (stat(path, &st) == 0)
 		return 0;
-	snprintf(path, len, CGROUP_ROOT "/docker/%s", id);
+	snprintf(path, len, SKB_CGROUP_ROOT "/docker/%s", id);
 	return stat(path, &st) == 0 ? 0 : -1;
 }
 
@@ -207,7 +219,9 @@ int skb_container_refresh(struct skb_container_map *m)
 
 		if (!id || !name || cgroup_of(id, path, sizeof(path)))
 			continue;
-		put_tree(m, path, name[0] == '/' ? name + 1 : name, 0);
+		struct named n = { m, name[0] == '/' ? name + 1 : name };
+
+		skb_cgroup_walk(path, NESTED_DEPTH, put_named, &n);
 	}
 	json_decref(root);
 	return 0;

@@ -154,16 +154,33 @@ static bool only_keys(json_t *obj, const char *const *keys, const char **bad)
 	json_t *v;
 
 	json_object_foreach(obj, k, v) {
-		int i;
+		bool known = false;
 
-		for (i = 0; keys[i] && strcmp(k, keys[i]); i++)
-			;
-		if (!keys[i]) {
+		for (int i = 0; keys[i]; i++)
+			if (strcmp(k, keys[i]) == 0)
+				known = true;
+		if (!known) {
 			*bad = k;
 			return false;
 		}
 	}
 	return true;
+}
+
+/* An optional key whose value must be `no` or `yes`. Sets *on for `yes`
+ * and leaves it alone when the key is absent. */
+static bool read_choice(json_t *obj, const char *key, const char *no,
+			const char *yes, bool *on)
+{
+	json_t *v = json_object_get(obj, key);
+	const char *s;
+
+	if (!v)
+		return true;
+	s = json_is_string(v) ? json_string_value(v) : "";
+	if (strcmp(s, yes) == 0)
+		*on = true;
+	return strcmp(s, yes) == 0 || strcmp(s, no) == 0;
 }
 
 #define FAIL(...) do { snprintf(errbuf, errlen, __VA_ARGS__); goto err; } while (0)
@@ -246,27 +263,12 @@ struct skb_policy *skb_policy_load(const char *path, char *errbuf, size_t errlen
 	if (!json_is_integer(v) || json_integer_value(v) != 1)
 		FAIL("%s: \"version\" must be 1", path);
 
-	/* Omitted means deny: a policy is there to restrict. */
-	v = json_object_get(root, "default");
-	if (v) {
-		const char *d = json_is_string(v) ? json_string_value(v) : "";
-
-		if (strcmp(d, "allow") == 0)
-			pol->default_allow = true;
-		else if (strcmp(d, "deny") != 0)
-			FAIL("%s: \"default\" must be \"allow\" or \"deny\"", path);
-	}
-
-	/* Omitted means allow: never block on data not seen. */
-	v = json_object_get(root, "on_unknown");
-	if (v) {
-		const char *d = json_is_string(v) ? json_string_value(v) : "";
-
-		if (strcmp(d, "block") == 0)
-			pol->unknown_block = true;
-		else if (strcmp(d, "allow") != 0)
-			FAIL("%s: \"on_unknown\" must be \"allow\" or \"block\"", path);
-	}
+	/* Without "default" the policy denies. Without "on_unknown" it allows,
+	 * so skbouncer never blocks on bytes it did not see. */
+	if (!read_choice(root, "default", "deny", "allow", &pol->default_allow))
+		FAIL("%s: \"default\" must be \"allow\" or \"deny\"", path);
+	if (!read_choice(root, "on_unknown", "allow", "block", &pol->unknown_block))
+		FAIL("%s: \"on_unknown\" must be \"allow\" or \"block\"", path);
 
 	v = json_object_get(root, "rules");
 	if (v) {
@@ -357,8 +359,11 @@ enum skb_verdict skb_policy_explain(const struct skb_policy *pol,
 		for (unsigned i = 0; i < ev->n_ciphers && i < SKB_MAX_CIPHERS; i++) {
 			uint16_t c = ntohs(ev->ciphers[i]);
 
-			if (!skb_cipher_ignored(c) && !cipher_permitted(r, c) && !n_bad++)
+			if (skb_cipher_ignored(c) || cipher_permitted(r, c))
+				continue;
+			if (n_bad == 0)
 				bad = c;
+			n_bad++;
 		}
 		part_c = !(ev->seen & SKB_SEEN_CIPHERS);
 	}
