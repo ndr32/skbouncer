@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
-/* Enforce mode: the policy compiled into the kernel's maps. The verdict has
- * to be reached in the kernel, since one reached here arrives after the
- * ClientHello has left. */
+/* Enforce mode. Compiles the policy into the kernel's maps. The verdict has
+ * to be reached in the kernel. A verdict reached in userspace arrives after
+ * the ClientHello has left. */
 #include <errno.h>
 #include <limits.h>
 #include <linux/ethtool.h>
@@ -43,7 +43,7 @@ int skb_enforce_scope(const char *path, uint64_t *id, uint32_t *level,
 			 "or one outside " SKB_CGROUP_ROOT, path);
 		return -1;
 	}
-	/* The root is level 0; each component below it adds one. */
+	/* The root is level 0, and each path component below it adds one. */
 	*level = 0;
 	for (p = real + sizeof(SKB_CGROUP_ROOT) - 1; *p; p++)
 		if (*p == '/' && p[1])
@@ -69,8 +69,8 @@ bool skb_enforce_is_veth(const char *ifname)
 	return err == 0 && strcmp(info.driver, "veth") == 0;
 }
 
-/* The cgroups the kernel can block: the scope and everything below it, as
- * of the last sync. Sorted, for skb_enforce_in_scope(). */
+/* The cgroups the kernel can block, as of the last sync. They are the scope
+ * and every cgroup below it, sorted for skb_enforce_in_scope(). */
 static uint64_t scope_ids[SKB_MAX_CGROUPS];
 static size_t n_scope;
 
@@ -133,8 +133,8 @@ int skb_enforce_sync(struct skb_loader *ldr, const struct skb_policy *pol,
 			return err;
 	}
 
-	/* Collected first: deleting the key get_next_key started from would
-	 * restart the walk. */
+	/* Stale keys are collected first. Deleting the key that get_next_key
+	 * started from would restart the walk. */
 	if (!(stale = malloc(SKB_MAX_CGROUPS * sizeof(*stale))))
 		return -ENOMEM;
 	while (n_stale < SKB_MAX_CGROUPS &&

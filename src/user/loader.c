@@ -54,10 +54,11 @@ static int handle_event(void *ctx, void *data, size_t len)
 	return 0;
 }
 
-/* A tcx link, owned by this process: the kernel detaches it when the last
- * fd goes, however the process ends. Other instances on the same hook keep
- * their own links. An audit instance goes first so it also reports what an
- * enforce instance drops; an enforce instance goes last. */
+/* Attaches through a tcx link owned by this process. The kernel detaches the
+ * link when its last file descriptor closes, however the process ends. Other
+ * instances on the same hook keep their own links. An audit instance
+ * attaches first and also reports what an enforce instance drops. An enforce
+ * instance attaches last. */
 int skb_loader_attach(struct skb_loader *ldr, const char *ifname,
 		      enum skb_direction dir)
 {
@@ -102,11 +103,11 @@ struct skb_loader *skb_loader_open(const struct skb_loader_opts *opts)
 		return NULL;
 	}
 
-	/* .rodata is only writable before load, and the program needs the
+	/* .rodata is writable only before load. The program needs the
 	 * direction to label its events. */
 	ldr->skel->rodata->attach_dir = opts ? (__u8)opts->direction
 					     : SKB_DIR_EGRESS;
-	/* The section names ingress; the hook is chosen at load. */
+	/* The section names ingress. The loader picks the hook here. */
 	if (opts && opts->direction == SKB_DIR_EGRESS)
 		bpf_program__set_expected_attach_type(ldr->skel->progs.skb_tc,
 						      BPF_TCX_EGRESS);

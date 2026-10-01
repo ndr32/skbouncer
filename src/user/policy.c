@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
-/* JSON policy and audit verdicts. Format and semantics: policy/README.md. */
+/* Loads the JSON policy and gives verdicts. policy/README.md defines the
+ * format and the verdict rules. */
 #include <arpa/inet.h>
 #include <fnmatch.h>
 #include <stdbool.h>
@@ -27,8 +28,8 @@ struct skb_policy {
 	size_t n_rules;
 };
 
-/* IANA TLS Cipher Suites registry, the names in current use. Anything else
- * can be given as hex. */
+/* Names from the IANA TLS Cipher Suites registry that are in current use.
+ * Other cipher suites can be given in hex. */
 static const struct { const char *name; uint16_t id; } cipher_names[] = {
 	{ "TLS_AES_128_GCM_SHA256",                        0x1301 },
 	{ "TLS_AES_256_GCM_SHA384",                        0x1302 },
@@ -146,8 +147,8 @@ static bool parse_version(const char *s, uint16_t *out)
 	return false;
 }
 
-/* Rejected rather than ignored: a misspelt "min_versoin" would otherwise
- * loosen the rule without a word. */
+/* Reports an unknown key as an error. A misspelt "min_versoin" would
+ * otherwise loosen the rule without warning. */
 static bool only_keys(json_t *obj, const char *const *keys, const char **bad)
 {
 	const char *k;
@@ -167,8 +168,8 @@ static bool only_keys(json_t *obj, const char *const *keys, const char **bad)
 	return true;
 }
 
-/* An optional key whose value must be `no` or `yes`. Sets *on for `yes`
- * and leaves it alone when the key is absent. */
+/* Reads an optional key whose value must be `no` or `yes`. Sets *on for
+ * `yes` and leaves *on unchanged when the key is absent. */
 static bool read_choice(json_t *obj, const char *key, const char *no,
 			const char *yes, bool *on)
 {
@@ -332,8 +333,9 @@ const char *skb_version_name(uint16_t v, char buf[8])
 
 #define WHY(...) do { if (why) snprintf(why, len, __VA_ARGS__); } while (0)
 
-/* Something seen breaks the rule: violation, however much is unseen.
- * Nothing seen does, but a constrained list is partial: unknown. */
+/* One offer that breaks the rule is a violation, however much of the
+ * ClientHello went unseen. With no such offer and a constrained list seen
+ * only in part, the verdict is unknown. */
 enum skb_verdict skb_policy_explain(const struct skb_policy *pol,
 				    const struct skb_event *ev,
 				    const char *container, char *why, size_t len)
@@ -385,7 +387,8 @@ enum skb_verdict skb_policy_explain(const struct skb_policy *pol,
 		part_v = !(ev->seen & SKB_SEEN_VERSIONS);
 	}
 
-	/* Every broken limit is named, so fixing one does not reveal another. */
+	/* The reason names every limit the ClientHello breaks, so fixing one
+	 * does not reveal another. */
 	if (low || n_bad) {
 		if (why && low)
 			n += snprintf(why, len, "offers TLS %s, minimum is %s",
@@ -431,7 +434,8 @@ bool skb_policy_blocks_unknown(const struct skb_policy *pol)
 	return pol->unknown_block;
 }
 
-/* Must decide exactly as skb_policy_explain() does; the kernel mirrors it. */
+/* Must decide exactly as skb_policy_explain() does. The kernel copy,
+ * check_policy(), must agree as well. */
 void skb_policy_compile(const struct skb_policy *pol, unsigned slot,
 			struct skb_krule *out)
 {

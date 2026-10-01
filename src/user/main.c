@@ -42,7 +42,8 @@ static void on_signal(int sig)
 	exiting = 1;
 }
 
-/* No SA_RESTART: the poll loop must see EINTR to notice `exiting`. */
+/* Installed without SA_RESTART. The poll loop has to see EINTR to notice
+ * `exiting`. */
 static int catch_signal(int sig)
 {
 	struct sigaction sa = { .sa_handler = on_signal };
@@ -57,7 +58,7 @@ struct run_state {
 	bool enforce;
 	struct skb_loader *ldr;
 	struct skb_container_map *containers;
-	struct skb_policy *policy;	/* NULL: no verdicts */
+	struct skb_policy *policy;	/* NULL when no policy is loaded */
 	const char *scope;		/* enforce mode's --cgroup */
 };
 
@@ -88,8 +89,8 @@ static void on_event(void *ctx, const struct skb_event *ev)
 	const char *verdict = st->policy ? skb_verdict_str(v) : NULL;
 	const char *reason = st->policy ? why : NULL;
 
-	/* A cgroup created since the last sync reached the kernel without its
-	 * rule. Out of scope the kernel does not judge at all. */
+	/* A cgroup created since the last sync reached the kernel without
+	 * its rule. Out of scope the kernel does not judge. */
 	if (st->enforce && v != ev->verdict && skb_enforce_in_scope(ev->cgroup_id))
 		fprintf(stderr, "skbouncer: kernel verdict %s, userspace %s "
 			"(cgroup %llu); policy map was stale\n",
@@ -106,9 +107,9 @@ static void on_event(void *ctx, const struct skb_event *ev)
 	skb_event_print(stdout, ev, name, verdict, reason);
 }
 
-/* The detected/delivered/dropped split is the coverage denominator: an event
- * lost to a full ringbuf must not look like a connection that never
- * happened. */
+/* Prints the counters. Detected, delivered and dropped together give the
+ * coverage denominator, and a ClientHello lost to a full ringbuf still
+ * counts as detected. */
 static void report(const struct skb_loader *ldr, const struct run_state *st)
 {
 	uint64_t stat[SKB_STAT__MAX];
@@ -129,8 +130,9 @@ static void report(const struct skb_loader *ldr, const struct run_state *st)
 		(unsigned long long)stat[SKB_STAT_DROPPED],
 		(unsigned long long)stat[SKB_STAT_SHORT]);
 
-	/* Detected but neither delivered nor counted as dropped means the
-	 * loss is somewhere else, which would silently bias coverage. */
+	/* A ClientHello detected but neither delivered nor dropped was lost
+	 * elsewhere, and the coverage figures would be biased without
+	 * notice. */
 	if (stat[SKB_STAT_DETECTED] != st->events + stat[SKB_STAT_DROPPED])
 		fprintf(stderr, "skbouncer: counters do not balance; "
 			"event loss is unaccounted for\n");
@@ -243,10 +245,9 @@ static int parse_args(int argc, char **argv, struct options *opt)
 	return 0;
 }
 
-/* After --container has filled in -i and --cgroup. */
+/* Runs after --container has filled in -i and --cgroup. */
 static int check_args(struct options *opt)
 {
-	/* Container traffic is ingress on the host end of its veth. */
 	if (!opt->direction_set && opt->ifname && skb_enforce_is_veth(opt->ifname))
 		opt->direction = SKB_DIR_INGRESS;
 
@@ -283,8 +284,8 @@ static int resolve_container(struct options *opt)
 	return 0;
 }
 
-/* Loads the policy, then the program, fills the policy maps, and attaches.
- * Whatever it managed to set up is left in `st` for teardown(). */
+/* Loads the policy and the program, fills the policy maps and attaches.
+ * Whatever setup() managed to create stays in `st` for teardown(). */
 static int setup(const struct options *opt, struct run_state *st)
 {
 	struct skb_loader_opts lopts = {
@@ -297,7 +298,8 @@ static int setup(const struct options *opt, struct run_state *st)
 	};
 	char errbuf[512];
 
-	/* Before anything is loaded: a bad policy must cost nothing. */
+	/* The policy loads first, so a bad policy file fails before anything
+	 * enters the kernel. */
 	if (opt->policy_path &&
 	    !(st->policy = skb_policy_load(opt->policy_path, errbuf, sizeof(errbuf)))) {
 		fprintf(stderr, "skbouncer: %s\n", errbuf);
@@ -313,8 +315,8 @@ static int setup(const struct options *opt, struct run_state *st)
 		st->scope = opt->cgroup_path;
 	}
 
-	/* Warm the cache so the first events cost no round trip to dockerd.
-	 * Failure is not fatal: names are then null until dockerd answers. */
+	/* Fills the name cache before the first event. If dockerd does not
+	 * answer, names stay null until it does. */
 	if (!(st->containers = skb_container_map_new())) {
 		perror("skbouncer: container map");
 		return -1;
@@ -325,7 +327,8 @@ static int setup(const struct options *opt, struct run_state *st)
 
 	if (!(st->ldr = skb_loader_open(&lopts)))
 		return -1;
-	/* The policy goes in before the attach: an empty map fails open. */
+	/* The policy maps are filled before the attach. An empty map would
+	 * let every ClientHello through. */
 	if (st->enforce && skb_enforce_sync(st->ldr, st->policy, st->containers,
 					    st->scope)) {
 		fprintf(stderr, "skbouncer: cannot load policy into the kernel\n");
@@ -352,8 +355,8 @@ static void announce(const struct options *opt, const struct run_state *st)
 			"or -i); Ctrl-C to unload\n");
 }
 
-/* SIGPIPE and SIGHUP too: a reader or a terminal that goes away is a reason
- * to stop, and the counters are still worth reporting. */
+/* SIGPIPE and SIGHUP also stop skbouncer cleanly. A closed pipe or terminal
+ * ends the run, and the counters are still printed. */
 static int catch_signals(void)
 {
 	if (catch_signal(SIGINT) || catch_signal(SIGTERM) ||
@@ -371,9 +374,10 @@ static int run(struct run_state *st)
 	while (!exiting) {
 		int err = skb_loader_poll(st->ldr, 200 /* ms */);
 
-		/* A container started since the last look gets its rule
-		 * before its first ClientHello, not after. On a clock: a busy
-		 * ringbuf returns from poll() far more often than 200 ms. */
+		/* A container started since the last sync gets its rule
+		 * before its first ClientHello. The sync runs on its own
+		 * clock. A busy ringbuf returns from poll() far more often
+		 * than every 200 ms. */
 		if (st->enforce && now_ms() >= next_sync) {
 			skb_container_refresh(st->containers);
 			sync_policy(st);
@@ -388,9 +392,9 @@ static int run(struct run_state *st)
 		}
 	}
 
-	/* Anything the kernel submitted just before the signal is still in the
-	 * ringbuf; drain it so the delivered count can be compared with the
-	 * kernel's own tally. */
+	/* Events the kernel submitted before the signal may still be in the
+	 * ringbuf. Draining them keeps the delivered count comparable with
+	 * the kernel counters. */
 	skb_loader_poll(st->ldr, 0);
 	report(st->ldr, st);
 	return EXIT_SUCCESS;
@@ -409,8 +413,8 @@ int main(int argc, char **argv)
 	struct run_state st = {};
 	int rc = EXIT_FAILURE;
 
-	/* Off a tty stdout is block buffered and the poll loop then blocks, so
-	 * events would sit unflushed until exit. */
+	/* When stdout is not a terminal it is block buffered. Events would
+	 * then wait unflushed while the poll loop blocks. */
 	setvbuf(stdout, NULL, _IOLBF, 0);
 
 	if (parse_args(argc, argv, &opt) != 0) {

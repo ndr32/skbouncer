@@ -17,10 +17,11 @@ struct skb_container_map;
 
 struct skb_container_map *skb_container_map_new(void);
 
-/* NULL if the cgroup belongs to no known container. Map owns the string. */
+/* NULL if the cgroup belongs to no known container. The map owns the string. */
 const char *skb_container_lookup(struct skb_container_map *m, uint64_t cgroup_id);
 
-/* Containers come and go; a miss should trigger one refresh before giving up. */
+/* Re-reads the container list from dockerd. skb_container_lookup() calls it
+ * once on a miss. */
 int skb_container_refresh(struct skb_container_map *m);
 
 
