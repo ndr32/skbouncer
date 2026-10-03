@@ -981,3 +981,41 @@ Verifier, first run: `PASS: 0 failures` (median cps off 160.7, audit 144.7,
 enforce 149.8 over 2 x 5 s; noise at this length). SIGINT during an audit
 run: exit 130, skbouncer printed its exit line, no containers, network,
 skbouncer or skb_tc left.
+
+## M7.3 — fuzz and attribution harnesses
+
+#### Iteration 1
+
+`eval/fuzz.sh` with `eval/fuzz.py` (gen, client and join steps) and
+`eval/fuzz-sink.sh`; `eval/attrib.sh` with `eval/attrib.py`. Both reuse
+`counters()` from `eval/collect.py` by import.
+
+- Originals: five records rebuilt from census `-msg` logs, picked by their
+  results.jsonl label: X25519 only, OpenSSL default (X25519MLKEM768), TLS 1.2
+  only, chrome150, firefox147. Mutant kind is `i % 4`, so 25% each; the
+  original and every random choice come from `random.Random(seed)`. A
+  `length` mutant draws one of record, handshake, session id, cipher list,
+  extensions or one extension, and sets it to a different value (0, v±1,
+  v/2, 2v, max or random). Each row also carries `from`, the original's label.
+- Sink: skb-tls-test has no Python, so busybox `nc -lk -p 4433 -e
+  /sink.sh`. The script finds the peer port from fd 0's socket inode in
+  `/proc/net/tcp`, then `wc -c`. It logs before closing, so the client's
+  read to EOF orders it.
+- Client: `docker exec` of `/fuzz.py client` in the anchor (python:3-alpine).
+  Source ports are bound to 20000 + i, so none repeats and the sink log
+  joins by port; that caps N at 12000.
+- attrib: `s_client` prints `CONNECTION ESTABLISHED` only with `-brief`.
+  Start line: every client `docker exec` touches `/go/ready.<name>` in a
+  shared bind mount and polls for `/go/go`; the host creates it once all N
+  are ready. Instances' files are `skb/<veth>.jsonl` and `.err`.
+
+Verifier, first run: `PASS: 0 failures`; info line: 300 mutants, 279
+produced events, 0 fields flagged complete that differ from the checker's
+decode. Took 1.5 min.
+
+Also checked by hand: default fuzz (5000, seed 1) in 76 s: 4693 detected and
+delivered, 8 too short, every byte received, 5005 distinct ports, still
+alive with one skb_tc. attrib with 10 containers: all 30 events name their
+own container, the five sharing a namespace included. SIGINT to either harness
+with skbouncer attached: exit 130, nothing left (containers, networks,
+skbouncer, skb_tc, `go/`).
