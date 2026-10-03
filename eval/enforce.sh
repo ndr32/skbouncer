@@ -26,6 +26,10 @@ SRV_GROUPS=X25519MLKEM768:SecP256r1MLKEM768:SecP384r1MLKEM1024:MLKEM512:MLKEM768
 SNI=api.example.com
 PFX=skb-enforce-$$
 NET=$PFX-net SRV=$PFX-srv
+# Go clients compile their program on every run, which takes most of the
+# TMO limit. One build cache shared by every Go container, filled once
+# before the matrix, leaves the limit for the handshake.
+GOCACHE_VOL=$PFX-gocache
 PORT=5000
 TMO=15
 POLICIES=(min13 ciphers min13_block)
@@ -41,6 +45,7 @@ cleanup() {
 	for p in "${SKBS[@]}"; do wait "$p" 2>/dev/null; done
 	docker ps -aq --filter "name=$PFX" | xargs -r docker rm -f >/dev/null 2>&1
 	docker network rm "$NET" >/dev/null 2>&1
+	docker volume rm "$GOCACHE_VOL" >/dev/null 2>&1
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM
@@ -132,7 +137,9 @@ pass() { # image cmd mode policy [scenario] [text] [wait]
 	[[ $scen ]] && extra="-cipher ALL@SECLEVEL=0 -min_protocol TLSv1"
 	listen "$PORT" "$extra"
 	c=$PFX-c$PORT
-	docker run -d --name "$c" --network "$NET" --add-host "$SNI:$SIP" --entrypoint sh "$image" \
+	local cache=()
+	[[ $image == golang:* ]] && cache=(-v "$GOCACHE_VOL:/root/.cache/go-build")
+	docker run -d --name "$c" --network "$NET" --add-host "$SNI:$SIP" "${cache[@]}" --entrypoint sh "$image" \
 		-c 'exec sleep infinity' >/dev/null || die "cannot start client $c"
 	cmd=${cmd//@SIP@/$SIP}; cmd=${cmd//@PORT@/$PORT}; cmd=${cmd//@SNI@/$SNI}
 	if [[ $mode != off ]]; then
@@ -157,6 +164,18 @@ pass() { # image cmd mode policy [scenario] [text] [wait]
 	[[ $mode != off ]] && stop_skbs
 	unlisten "$PORT"
 }
+
+# Fill the Go build cache: each Go client once against a closed port, with
+# no time limit. The connection fails; the compiled program stays cached.
+while IFS= read -r line; do
+	[[ -z ${line//[[:space:]]/} || $line == \#* ]] && continue
+	IFS='|' read -r label image cmd <<<"$line"
+	[[ $image == golang:* ]] || continue
+	log "building $label once for the cache"
+	cmd=${cmd//@SIP@/127.0.0.1}; cmd=${cmd//@PORT@/1}; cmd=${cmd//@SNI@/127.0.0.1}
+	docker run --rm -v "$GOCACHE_VOL:/root/.cache/go-build" --entrypoint sh "$image" -c "$cmd" \
+		>/dev/null 2>&1
+done <"$CLIENTS"
 
 log "matrix: every client under ${POLICIES[*]}, reference then enforce"
 while IFS= read -r line; do
