@@ -3,8 +3,9 @@
 Replaces the 24 Sep draft. Follows the supervisor's software testing guidance
 of 15 Sep 2026 in shape, adapted to a kernel tool with a command-line interface.
 
-Six experiments test 16 criteria. Experiments 1 to 5 are objective testing
-and experiment 6 is subjective testing.
+Eight experiments test 25 criteria. Experiments 1 and 3 to 8 are measured
+on EC2. Experiment 2 is desk work on the code. The user survey is reported
+separately and is not an evaluation point.
 Every experiment is written up in the same six parts. The percentages are the
 share of each write-up and come from the supervisor's guidance.
 
@@ -44,10 +45,19 @@ a measurement and discussed without a pass mark.
 | C13 | Handshake overhead | Change in connections per second against skbouncer off | Under 5% | 5 |
 | C14 | Kernel cost per packet | Mean run time per program call | None, reported | 5 |
 | C15 | Event loss | Events dropped with the ring buffer full during experiment 5 | 0 | 5 |
-| C16 | Operator opinion | Median survey score on the measurable questions | 4 of 5 or above | 6 |
+| C16 | Robustness to malformed input | Crashes, and fields flagged complete that differ from an independent decode of the mutated bytes | 0 and 0 | 3 |
+| C17 | Data-path overhead | Change in bulk TCP throughput against skbouncer off | Under 5% | 5 |
+| C18 | Tail latency | Change in p99 handshake latency against skbouncer off | Under 10% | 5 |
+| C19 | Policy scalability | Change in handshake rate from 1 rule to 64 rules, and from 1 permitted cipher to every cipher offered | Under 5% | 5 |
+| C20 | Saturation | Handshake rate at which the first event is dropped | None, reported | 5 |
+| C21 | Resource footprint | Program size, verified instructions, map memory, userspace memory and CPU | None, reported | 5 |
+| C22 | Enforcement at scale | Census ClientHellos under three policies blocked exactly when the reference verdict requires it | 100% | 6 |
+| C23 | Scenario validation | Scripted scenarios flagged in audit mode and blocked in enforce mode | All | 6 |
+| C24 | Attribution under concurrency | Events naming the correct container with 10 and with 50 containers at once | 100%, none unnamed | 7 |
+| C25 | Grade agreement | Security grade from skbouncer's output equal to the grade from the server's decode, among ClientHellos read in full | 100% | 8 |
 
-The 5% target in C13 and the median of 4 in C16 are the author's choice
-and are set now so the results cannot move them.
+The targets in C13, C17, C18 and C19 are the author's choice and are set
+now so the results cannot move them.
 
 ---
 
@@ -139,7 +149,7 @@ capped at 64.
 **Objective.** Measure whether the fields skbouncer reports match the bytes
 the client sent.
 
-**Criteria.** C2, C4, C5, C6, C7, C10.
+**Criteria.** C2, C4, C5, C6, C7, C10, C16.
 
 **Method.** `eval/collect.sh` with the census clients at MTU 1500, 10
 connections each, plus two edge cases (TLS 1.2 only, an 83-cipher list).
@@ -150,8 +160,16 @@ name of the container that ran the client. Compute a reference verdict from
 the server's decode under the example policy and compare it with
 skbouncer's verdict.
 
+Robustness (C16) uses `eval/fuzz.sh`. Real ClientHellos from the census are
+mutated 5,000 times with byte changes, cuts and wrong length fields. Each
+mutant is sent as the first segment of its own connection while skbouncer
+runs in audit mode. An independent Python decoder parses each mutant as it
+was sent. Every field skbouncer flags complete must match that decode, the
+skbouncer process must still run at the end, and the program must still be
+attached.
+
 **Results.** One table with one row per criterion (C2, C4, C5, C6, C7,
-C10), the count, the total and the target.
+C10, C16), the count, the total and the target.
 
 `unknown` verdicts are not scored here: they are counted for C9. A decided
 verdict that disagrees with the reference can only come from a field flagged
@@ -162,7 +180,7 @@ block or pass a connection on false data. The expected count is zero. Any case a
 explained from the code. An `unknown` where the reference says `violation`
 is the fail-open design, not an error.
 
-**Limitation.** `parse.py` is a second parser. Disagreements are checked by
+**Limitation.** `eval/collect.py` is a second parser. Disagreements are checked by
 hand against the hex bytes.
 
 ---
@@ -174,8 +192,10 @@ carries, and whether a version policy can still be judged.
 
 **Criteria.** C8, C9.
 
-**Method.** `eval/collect.sh` with the census clients at MTU 1500 and MTU
-1280, 20 connections each, skbouncer on the client's veth. Ground truth for
+**Method.** `eval/collect.sh` with the census clients, skbouncer on the
+client's veth. MTU 1500 and MTU 1280 with TCP timestamps on, 20 connections
+per client. Four further arms with 5 connections per client: MTU 1460 and
+1400 with timestamps on, and MTU 1500 and 1280 with timestamps off. Ground truth for
 "split" does not come from skbouncer: the record length from the server's
 decode, plus the 5-byte record header, against the MSS the collector
 measures with `getsockopt(TCP_MAXSEG)` in the client's namespace. Checked
@@ -184,13 +204,13 @@ split ClientHello showed exactly MSS − 5 record bytes, so the network MTU
 sets the segment skbouncer sees.
 
 **Hypotheses, stated before the run.**
-- H1. Every post-quantum ClientHello is split at both MTUs. No classical one
-  is split.
+- H1. Every post-quantum ClientHello is split at every MTU tested. No
+  classical one is split.
 - H2. Whether `supported_versions` is in the first segment depends on the
   client's extension order and not on the MTU.
 - H3. The cipher list is always in the first segment.
 
-**Results.** One table per MTU (record length, bytes seen, versions
+**Results.** One table per arm (record length, bytes seen, versions
 complete). One bar chart of the share of connections with a decidable
 verdict, per client.
 
@@ -206,9 +226,10 @@ implementation (OpenSSL); future work.
 
 ## Experiment 5. Runtime cost
 
-**Objective.** Measure the handshake cost of running skbouncer.
+**Objective.** Measure what running skbouncer costs handshakes and ordinary
+traffic, and how much of the host it uses.
 
-**Criteria.** C13, C14, C15.
+**Criteria.** C13 to C15, C17 to C21.
 
 **Method.** `eval/cost.sh`: `openssl s_time -new -time 30` against the
 server container. Three conditions (off, audit, enforce), 10 rounds, the
@@ -220,8 +241,24 @@ separate short pass with `kernel.bpf_stats_enabled=1`. Read the
 dropped-event counter that skbouncer prints on exit after each audit and
 enforce run.
 
+`eval/load.sh` adds the rest, under the same pinning and rotation.
+- C17. iperf3 bulk TCP throughput between two containers, off, audit and
+  enforce, 5 runs of 20 seconds each.
+- C18. 2,000 sequential handshakes per condition, each timed by the client.
+  p50 and p99 per condition.
+- C19. Handshake rate in enforce mode with 1, 16 and 64 rules, the client's
+  container matched by the last rule, and with 1 permitted cipher against
+  every cipher the client offers. 5 runs of 20 seconds each.
+- C20. Parallel `s_time` clients, doubled each step until an event is
+  dropped or the client CPUs are saturated.
+- C21. `bpftool prog show` (translated and JIT size, verified
+  instructions), `bpftool map show` (memory per map), and the skbouncer
+  process's resident memory and CPU time over a 30-second audit run.
+
 **Results.** Median connections per second per condition and the change
 from off. Mean nanoseconds per program call. Dropped events per run.
+Throughput, p50 and p99 latency per condition. A line chart of handshake
+rate against rule count. The saturation step. The footprint table.
 
 **Limitation.** One EC2 instance, client and server on the same host. The
 percentage change is the claim, and the absolute figures apply to this
@@ -233,47 +270,104 @@ over ClientHellos alone.
 
 ---
 
-## Experiment 6. User survey (subjective)
+## Experiment 6. Enforcement at scale and scenarios
 
-**Objective.** Measure how possible operators rate the purpose and the
-functions of skbouncer.
+**Objective.** Check that enforce mode blocks exactly what the policy
+forbids across real clients, and show it stopping concrete cases.
 
-**Criteria.** C16.
+**Criteria.** C22, C23.
 
-**Method.** 20 to 30 respondents with an IT background. Respondents cannot
-run a kernel tool, so the survey opens with a two minute screen recording of
-skbouncer in audit and enforce mode. Ten questions from the survey pool,
-covering the functions and the purpose, with one open feedback question. No
-questions on the interface. Likert scale for the measurable questions.
+**Method.** `eval/enforce.sh`. The census clients run against three
+policies: a TLS 1.3 minimum, a list of permitted cipher suites, and the
+TLS 1.3 minimum with `on_unknown` set to block. A reference verdict comes
+from the server's decode of each ClientHello. Blocked means the server
+never received the ClientHello. Three scripted scenarios follow, each
+in audit mode and then in enforce mode.
+- A legacy client that offers only TLS 1.0 and 1.1.
+- A client that offers a CBC cipher suite with SHA-1, outside the permitted
+  list.
+- A post-quantum browser ClientHello cut before `supported_versions`, under
+  `on_unknown` block.
 
-**Results.** One chart per measurable question. The open answers grouped by
-theme.
+For each blocked client, the time until the client reports failure, capped
+at 300 seconds.
 
-**Conclusion.** Three to five points drawn from the survey.
+**Results.** A table of clients by policy with blocked or passed against
+the reference. One screenshot per scenario in each mode. The time each
+blocked client waits.
+
+**Discussion.** Blocking drops the ClientHello and leaves the connection
+retransmitting (policy/README.md, Limits). The wait times show what an
+administrator sees on the client side.
+
+---
+
+## Experiment 7. Attribution under concurrency
+
+**Objective.** Check that every event names the right container when many
+containers make handshakes at the same time.
+
+**Criteria.** C24.
+
+**Method.** `eval/attrib.sh`. 10 and then 50 containers, each making 5
+handshakes at once. Half of the containers share network namespaces in
+groups of five, so several containers leave through one veth. Each event's
+container name is compared with the container that made the connection.
+
+**Results.** Correct, wrong and unnamed events at each size.
+
+**Discussion.** The cgroup id names the container. The veth only names the
+network namespace, which the shared groups make visible.
+
+---
+
+## Experiment 8. Security grading
+
+**Objective.** Show what an administrator learns about each container's TLS
+security from skbouncer alone, using the grading scale of Durumeric et al.
+(NDSS 2017).
+
+**Criteria.** C25.
+
+**Method.** Analysis of the data from experiment 3, with no new run. Each
+ClientHello gets a grade from its offered cipher suites and versions. F
+when it offers an export or DES cipher suite. C when it offers RC4 or its
+best version is SSL 3.0. B when it offers none of Chrome's strong cipher
+suites or its best version is TLS 1.1. A otherwise. The grade is computed
+twice, from skbouncer's events and from the server's decode, and the two
+are compared where skbouncer read both lists in full.
+
+**Results.** Grades per client from both sources. The agreement count.
+The capped 83-cipher client, graded from a partial list.
+
+**Discussion.** A partial cipher list can hide a weak cipher suite, so the
+grade is reported as certain only when the list was read in full. This
+matches the `unknown` verdict.
 
 ---
 
 ## Chapter conclusion
 
-One section after experiment 6. The criteria table from this plan with a
+One section after experiment 8. The criteria table from this plan with a
 Result column and met or not met in each row, followed by the overall
-conclusion drawn from the six individual conclusions.
+conclusion drawn from the eight individual conclusions.
 
 ---
 
-## Schedule (today is Wed 30 Sep)
+## Schedule (revised Sat 3 Oct)
 
 | Date | Work |
 |---|---|
-| Wed 30 Sep to Thu 1 Oct | Harnesses for experiments 3, 4 and 5. Tag `eval-1`. Record the screen recording. Build the survey. |
-| Fri 2 Oct | Survey goes out. |
-| Fri 2 to Sun 4 Oct | Run experiments 1, 3, 4 and 5. |
-| Mon 5 to Sun 11 Oct | Write chapter 4. Experiment 2 is desk work. Survey closes Sun 11 Oct. |
-| Mon 12 to Sun 18 Oct | Survey charts, revision of the whole report. |
+| Wed 30 Sep to Thu 1 Oct | Harnesses for experiments 1, 3, 4 and 5. Tag `eval-1`. Done. |
+| Sat 3 Oct | Plan revised to eight experiments. |
+| Sun 4 Oct | New harnesses: `fuzz.sh`, `load.sh`, `enforce.sh`, `attrib.sh`. |
+| Mon 5 Oct | Campaign on EC2, about four hours. |
+| Tue 6 to Sun 11 Oct | Write chapter 4. Experiment 2 is desk work. |
+| Mon 12 to Sun 18 Oct | Revision of the whole report. |
 | Mon 19 Oct | Submit. |
 
-If time runs short, drop the 1280 arm of experiment 4 and the `bpf_stats`
-reading in experiment 5.
+If time runs short, drop the four extra arms of experiment 4 and the
+saturation step of experiment 5.
 
 ---
 
