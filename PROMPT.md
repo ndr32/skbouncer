@@ -1,4 +1,4 @@
-# Loop task: M7.3 — fuzz and attribution harnesses
+# Loop task: M7.4 — load and enforcement harnesses
 
 Read `CLAUDE.md` for scope and safety rules; they override this file.
 Read `PROGRESS.md` — you have no memory of earlier iterations. The loop
@@ -6,87 +6,104 @@ appends the verifier's verdict there after every iteration.
 
 ## Goal
 
-Two new harnesses for `eval/PLAN.md`: `eval/fuzz.sh` (experiment 3, C16)
-and `eval/attrib.sh` (experiment 7, C24). Like `eval/collect.sh`, they run
-skbouncer in audit mode, save raw data and score nothing. skbouncer is
-frozen at the `eval-1` tag; `eval/collect.sh` and `eval/cost.sh` show the
-house style.
+Two new harnesses for `eval/PLAN.md`: `eval/load.sh` (experiment 5, C17 to
+C21) and `eval/enforce.sh` (experiment 6, C22 and C23). They save raw data
+and score nothing. skbouncer is frozen at `eval-1`. `eval/cost.sh` shows
+the house style for runs with pinning, rotation and `bpf_stats`;
+`eval/collect.sh` for server logs and clients.
 
-## eval/fuzz.sh
+The VM has 3.3 GiB of memory and 2 CPUs. Keep runs small while iterating.
 
-```
-eval/fuzz.sh --out DIR [--n N] [--seed S]
-```
-
-Sends malformed ClientHellos through skbouncer, one per TCP connection.
-Defaults: N = 5000, S = 1.
-
-1. Originals: at least four real ClientHello records (record header and
-   body) taken from `eval/census/logs/`, including a classical OpenSSL
-   client, a post-quantum one, the TLS 1.2-only client and a browser.
-2. Mutants: N, from the originals, deterministic in S, so two runs with one
-   seed send identical bytes. Four kinds, each at least 10% of N:
-   - `flip`: random bytes changed;
-   - `truncate`: the record cut short at a random length;
-   - `length`: a length field set wrong (record, handshake, session id,
-     cipher list, extensions, or one extension);
-   - `insert`: random bytes inserted.
-3. Network: a server container (`skb-tls-test`) running a sink on one port
-   that reads each connection to EOF and logs the peer's port and the byte
-   count. An anchor container with Python, joined by the client. skbouncer
-   in audit mode on the anchor's veth (`--container`), `--format json`.
-4. Client: one Python process in the anchor's namespace. For each original,
-   then each mutant: connect, record the local port, send the bytes in one
-   `sendall`, shut down writing, read to EOF, close.
-5. After the last connection: record whether skbouncer is still running and
-   how many `skb_tc` programs are on the veth, then stop it with SIGINT.
-6. `DIR/mutants.jsonl`, one object per connection in send order:
-   `{"i", "kind", "sport", "hex", "received", "events"}`. `kind` is
-   `original` or a mutation kind; `received` is the sink's byte count for
-   that port; `events` is every skbouncer event whose `sport` is this one.
-7. `DIR/run.json`: `{"n", "seed", "sent", "alive_at_end", "attached_at_end",
-   "counters": {"detected", "delivered", "dropped", "short"}}`.
-8. `DIR/env.txt` from `eval/env.sh`, and the raw `skbouncer.jsonl`,
-   `skbouncer.err` and sink log.
-
-## eval/attrib.sh
+## eval/load.sh
 
 ```
-eval/attrib.sh --out DIR --containers N [--handshakes K]
+eval/load.sh --out DIR [--runs R] [--seconds S] [--handshakes H] [--max-parallel P]
 ```
 
-N containers make K TLS handshakes each, all containers at once. Default
-K = 5. N is a multiple of 10.
+Defaults R = 5, S = 20, H = 2000, P = 8. One server and one client
+container (`skb-tls-test` or `python:3-alpine`), MTU 1500. Pinning and
+`bpf_stats` exactly as in `eval/cost.sh`, which you may import from or
+copy but not edit. Conditions `off`, `audit` and `enforce` rotate each
+round as in `cost.sh`; enforce uses `eval/cost-policy.json` unless a part
+says otherwise. Every audit or enforce run records
+`"skbouncer": {"counters", "events", "blocks", "passes"}` (`passes`: events
+with `"action": "pass"`) and `"attached"`, sampled during the run.
 
-1. A server container (`skb-tls-test`) running one `openssl s_server` per
-   client container, each on its own port, with `-naccept K`.
-2. Client containers (`skb-tls-test`), each named. Half of them stand alone
-   with their own veth. The other half are in groups of five that share
-   one network namespace: the first of each group has the veth and the
-   other four join it with `--network container:<first>`.
-3. One skbouncer instance per veth, in audit mode, `--container` on the
-   container that owns the veth, `--format json`. All attached before any
-   handshake starts.
-4. Start every container's K handshakes at the same moment
-   (`openssl s_client` to its own port, one after another inside the
-   container). Wait for all, then stop every instance with SIGINT.
-5. `DIR/containers.jsonl`, one object per container:
-   `{"name", "shared", "veth", "ip", "dport", "handshakes_ok", "events"}`.
-   `handshakes_ok` counts `CONNECTION ESTABLISHED` in its client output;
-   `events` is every event, from any instance, whose `dport` is this
-   container's port.
-6. `DIR/run.json`: `{"containers", "handshakes", "instances",
-   "counters": [one {"veth", "detected", "delivered", "dropped", "short"}
-   per instance]}`.
-7. `DIR/env.txt` from `eval/env.sh`, and each instance's raw output.
+1. Throughput (C17), R runs per condition. A bulk TCP transfer from client
+   to server for S seconds, timed by the receiver. `throughput.jsonl`:
+   `{"round", "condition", "bytes", "wall_seconds", "gbps", "attached", "skbouncer"}`.
+2. Latency (C18), R runs per condition. H sequential TLS handshakes from
+   one client process, each timed on its own. `latency.jsonl`:
+   `{"round", "condition", "ok", "ms": [H timings], "skbouncer"}`.
+3. Policy scalability (C19), enforce mode, R runs of S seconds of
+   `s_time` for each of four policies: 1, 16 and 64 rules with the client
+   offering and permitted its 30 ciphers, and 1 rule with the client
+   offering and permitted one cipher. The client's container matches the
+   last rule. `policy.jsonl`:
+   `{"round", "rules", "ciphers", "connections", "wall_seconds", "cps", "skbouncer"}`.
+4. Saturation (C20), audit mode, S seconds per level: 1, 2, 4 ... up to P
+   parallel `s_time` clients. `saturation.jsonl`:
+   `{"parallel", "connections", "wall_seconds", "cps", "counters"}`.
+5. Footprint (C21), one audit run of S seconds under `s_time` load.
+   `footprint.json`: `{"prog": {"bytes_xlated", "bytes_jited",
+   "verified_insns"}, "maps": [{"name", "type", "bytes_memlock"}],
+   "rss_kib", "cpu_seconds", "seconds"}`, from `bpftool -j` and the
+   skbouncer process's `/proc` entries.
+6. `run.json`: `{"runs", "seconds", "handshakes", "max_parallel", "nproc",
+   "bpf_stats_enabled", "pinning"}`, and `env.txt` from `eval/env.sh`.
 
-## Done means `scripts/verify-M7.3.sh` passes
+## eval/enforce.sh
 
-It runs `fuzz.sh` twice with 300 mutants and seed 7, and `attrib.sh` with
-10 containers and 3 handshakes, and checks them against its own decode.
-About five minutes. It prints, without failing on it, how many fields
-skbouncer flagged complete that differ from its decode of a mutant: that
-is the measurement, about a frozen tool.
+```
+eval/enforce.sh --out DIR [--clients FILE] [--wait-cap S]
+```
+
+Defaults: `eval/clients.txt`, S = 300. Server: `skb-tls-test` with every
+key exchange group enabled (as in `eval/census/run.sh`), one
+`openssl s_server -msg -naccept 1` per connection, logging to
+`DIR/server/<port>.log`.
+
+Enforce mode blocks only inside the `--cgroup` scope, so every client runs
+in its own container on its own network, never in another container's
+namespace. Start it with `sleep`, attach skbouncer with `--container` on
+it, then `docker exec` the client command.
+
+1. Policies, written to `DIR/policies/<name>.json`, each with one rule for
+   the client containers: `min13` (minimum TLS 1.3), `ciphers` (the three
+   TLS 1.3 suites and the ECDHE GCM suites only), `min13_block` (minimum
+   TLS 1.3 with `"on_unknown": "block"`).
+2. Matrix, every client in the file under every policy. First a reference
+   pass with no skbouncer, then an enforce pass with
+   `--mode enforce --format json -p <policy>`. Each client command runs
+   under `timeout 15`: a blocked client otherwise waits for TCP to give up.
+   `matrix.jsonl`: `{"label", "policy", "ref_port", "enf_port",
+   "reference", "enforce_received", "events"}`. `reference` is the server's
+   decode of the reference pass (`record_len`, `legacy_version`,
+   `ciphers`, `versions`, as in `eval/collect.py`); `enforce_received`
+   whether the enforce pass's server log shows a ClientHello; `events` the
+   enforce pass's events.
+3. Scenarios, each run in audit mode and then in enforce mode, with text
+   output (no `--format`) saved for screenshots as
+   `DIR/scenarios/<name>-audit.txt` and `<name>-enforce.txt`, and JSON as
+   well. The server for these accepts TLS 1.0 and every cipher
+   (`-cipher ALL@SECLEVEL=0 -min_protocol TLSv1`).
+   - `legacy`: OpenSSL offering only TLS 1.0 and 1.1, policy `min13`.
+   - `cbc_sha1`: OpenSSL with `-tls1_2 -cipher ECDHE-RSA-AES128-SHA`,
+     policy `ciphers`.
+   - `pq_unknown`: `curl_firefox147`, policy `min13_block`.
+   `scenarios.jsonl`: `{"name", "audit": {"port", "events"},
+   "enforce": {"port", "received", "events"}}`.
+4. Wait times: each client once more under `min13` in enforce mode,
+   without `timeout 15`, timed until the client exits, capped at S.
+   `waits.jsonl`: `{"label", "seconds", "capped", "exit"}`.
+5. `run.json`: `{"clients", "policies", "wait_cap"}`, and `env.txt`.
+
+## Done means `scripts/verify-M7.4.sh` passes
+
+It runs `load.sh` with 1 run of 3 seconds, 200 handshakes and up to 2
+parallel clients, and `enforce.sh` with 3 clients and a 20-second cap. It
+reports, without failing, whether blocks match what the servers received:
+that is the measurement, about a frozen tool.
 
 ## Rules
 
@@ -94,10 +111,13 @@ is the measurement, about a frozen tool.
   `policy/`. The verifier fails if they differ from `eval-1`.
 - Never edit `scripts/verify-*.sh`, `tests/`, `scripts/loop.sh`,
   `scripts/guard.sh`, `eval/census/`, `eval/env.sh`, `eval/collect.*`,
-  `eval/cost.*`, `eval/functional.sh` or the client lists. If you believe a
-  verifier is wrong, say so in `PROGRESS.md` and stop.
-- Audit mode only. Never run enforce mode.
-- Name everything `skb-fuzz-*` or `skb-attrib-*` and remove it on exit,
+  `eval/cost.*`, `eval/functional.sh`, `eval/fuzz*`, `eval/attrib*` or the
+  client lists. If you believe a verifier is wrong, say so in
+  `PROGRESS.md` and stop.
+- Enforce mode only through `--container` on a test container made by the
+  harness. Never on `ens33`, `tailscale0` or `docker0`, never the root
+  cgroup.
+- Name everything `skb-load-*` or `skb-enforce-*` and remove it on exit,
   on failure and Ctrl-C too.
 - `sudo -n` works for `./skbouncer` and `bpftool` only.
 - Never run `apt`, `apt-get`, `apt-mark`. Never regenerate `src/bpf/vmlinux.h`.
