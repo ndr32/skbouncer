@@ -114,8 +114,9 @@ OUT: decryption, IPv6 (connect4 is v4-only), Kubernetes / multi-host, Encrypted 
 - M7 - evaluation harness (parse accuracy, fragmentation coverage, runtime cost)  <- CURRENT
        FROZEN at tag `eval-1` (2026-10-01) for the campaign. Until it ends, do not
        change src/, include/, Makefile, policy/, eval/functional.sh, eval/collect.*,
-       eval/cost.*, eval/clients*.txt or eval/cost-policy.json. EC2 runs a detached
-       checkout of eval-1. A fix means a new tag (eval-2) and rerunning every
+       eval/cost.*, eval/clients*.txt or eval/cost-policy.json. The campaign runs tag
+       `eval-1.1` (same tool source as eval-1, plus fuzz/attrib/load/enforce
+       harnesses), as a detached checkout on EC2. A fix means a new tag (eval-2) and rerunning every
        experiment it could affect. Scoring scripts, eval/PLAN.md and docs may change.
 
 Build each milestone so it loads and runs before starting the next.
