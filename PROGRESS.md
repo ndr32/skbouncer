@@ -1019,3 +1019,52 @@ alive with one skb_tc. attrib with 10 containers: all 30 events name their
 own container, the five sharing a namespace included. SIGINT to either harness
 with skbouncer attached: exit 130, nothing left (containers, networks,
 skbouncer, skb_tc, `go/`).
+
+## M7.4 — load and enforcement harnesses
+
+#### Iteration 1
+
+`eval/load.sh` with `eval/load.py`; `eval/enforce.sh` with `eval/enforce.py`
+(reuses `server_view` from `eval/collect.py` by import).
+
+load.sh:
+- Two client images. busybox `nc` moved only 2.7 Gbps against 48 for a
+  Python socket pair, and per-handshake timing needs one long-lived process,
+  so bulk (C17) and latency (C18) run from python:3-alpine (`load.py send`
+  and `hs`) against a python:3-alpine sink timed from first byte to EOF.
+  s_time parts (C19 to C21) run from skb-tls-test. Server and sink share
+  the server CPU, both clients the client CPU; pinning otherwise as cost.sh.
+- `eval/cost-policy.json` names `skb-cost-*` under default deny, so it would
+  block `skb-load-*`. `policies/cost.json` is that rule renamed to
+  `skb-load-*`. Python's 17 default ciphers are all in it.
+- C19: 1, 16 and 64 rules (`skb-load-none-N` then the client's), and
+  1 rule permitting 0x1301 with s_time `-tls1_3 -ciphersuites
+  TLS_AES_128_GCM_SHA256` (one cipher offered, checked in an event). Policy
+  order rotates per round.
+- C21 `verified_insns`: bpftool 7.7 does not print it, and the kernel shows
+  it only in the loader's fdinfo (root). It comes from `bpftool -n -d prog
+  load build/skbouncer.bpf.o /sys/fs/bpf/<missing dir>/prog`: verifier
+  stats print (11813 insns), the pin fails, nothing stays loaded. rodata
+  defaults (audit); recorded as `verified_insns_from`. RSS and CPU from
+  `/proc/<skbouncer pid>` (sudo's child).
+
+enforce.sh:
+- Fresh container per pass. It is removed before skbouncer stops: a client
+  killed by `timeout` leaves an orphaned socket retransmitting its
+  ClientHello, which would reach the server once enforcement detaches.
+- A stuck s_server (blocked ClientHello) gets 2 s to exit, then `pkill`.
+- Scenario screenshots: two enforcing instances on one veth means the first
+  drops the packet and the second never sees it (first try: the text file
+  showed 0 detected). Each scenario mode now has a JSON pass (recorded) and a
+  separate text pass (`<name>-<mode>.txt`, stdout and stderr together).
+- Wait times: `/proc/uptime` in the client container either side of
+  `timeout CAP`; capped is seconds >= CAP. Blocked openssl clients hit the
+  cap; curl exits on its own `--max-time 5`.
+- Not tried: the go client from `eval/clients.txt` compiles under
+  `timeout 15` in a fresh container, which may not be enough on 2 CPUs.
+
+Verifier, first run: `PASS: 0 failures` in 5.7 min. Info: saturation x1 715
+cps, x2 860, none dropped; 9 of 9 matrix rows block exactly when the server
+saw no ClientHello; all three scenarios `violation`/`violation`/`unknown` in
+audit and not received under enforce. SIGTERM mid-run to either harness
+(skbouncer attached): exit 130, nothing left.
