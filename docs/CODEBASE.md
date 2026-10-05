@@ -168,6 +168,7 @@ Semantics and limits are in `policy/README.md`.
 
 | Where | What |
 |---|---|
+| `docs/c-deslop.md` | Review rules for keeping the C and eBPF code plain: what counts as slop here, and what only looks like it. |
 | `policy/README.md` | The policy format, verdict rules, enforcement scope, limits. |
 | `scripts/verify-M*.sh`, `tests/check_*.py` | One verifier per milestone. Each sets up containers, runs skbouncer, and checks the result against an independent source (the TLS server's own log, `bpftool`). `verify-M6.6.sh` reruns the chain from M3. |
 | `tests/tls/Dockerfile` | The pinned OpenSSL 3.5.8 test image. |
