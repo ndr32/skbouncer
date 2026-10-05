@@ -9,7 +9,6 @@
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
 
-#include "event.h"
 #include "loader.h"
 #include "skbouncer.skel.h"
 
@@ -59,8 +58,7 @@ static int handle_event(void *ctx, void *data, size_t len)
  * instances on the same hook keep their own links. An audit instance
  * attaches first and also reports what an enforce instance drops. An enforce
  * instance attaches last. */
-int skb_loader_attach(struct skb_loader *ldr, const char *ifname,
-		      enum skb_direction dir)
+int skb_loader_attach(struct skb_loader *ldr, const char *ifname)
 {
 	LIBBPF_OPTS(bpf_tcx_opts, opts, .flags = ldr->enforce ? 0 : BPF_F_BEFORE);
 	int ifindex = if_nametoindex(ifname);
@@ -71,8 +69,8 @@ int skb_loader_attach(struct skb_loader *ldr, const char *ifname,
 	}
 	ldr->link = bpf_program__attach_tcx(ldr->skel->progs.skb_tc, ifindex, &opts);
 	if (!ldr->link) {
-		fprintf(stderr, "skbouncer: cannot attach to %s %s: %s\n",
-			ifname, skb_direction_name(dir), strerror(errno));
+		fprintf(stderr, "skbouncer: cannot attach to %s ingress: %s\n",
+			ifname, strerror(errno));
 		return -1;
 	}
 	return 0;
@@ -103,14 +101,6 @@ struct skb_loader *skb_loader_open(const struct skb_loader_opts *opts)
 		return NULL;
 	}
 
-	/* .rodata is writable only before load. The program needs the
-	 * direction to label its events. */
-	ldr->skel->rodata->attach_dir = opts ? (__u8)opts->direction
-					     : SKB_DIR_EGRESS;
-	/* The section names ingress. The loader picks the hook here. */
-	if (opts && opts->direction == SKB_DIR_EGRESS)
-		bpf_program__set_expected_attach_type(ldr->skel->progs.skb_tc,
-						      BPF_TCX_EGRESS);
 	if (opts && opts->enforce) {
 		ldr->enforce = true;
 		ldr->skel->rodata->enforce = 1;

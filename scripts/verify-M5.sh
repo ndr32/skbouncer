@@ -110,7 +110,7 @@ IDX=$(docker exec "$PFX-strict" cat /sys/class/net/eth0/iflink)
 VETH=$(ip -o link | awk -v i="$IDX" -F': ' '$1+0==i {split($2,a,"@"); print a[1]}')
 [[ -n "$VETH" ]] || die "cannot find the shared veth"
 
-sudo -n ./skbouncer -i "$VETH" --direction ingress --format json -p "$OUT/policy.json" \
+sudo -n ./skbouncer -i "$VETH" --format json -p "$OUT/policy.json" \
 	>"$OUT/events.jsonl" 2>"$OUT/loader.err" &
 LOADER=$!
 # Captured, not piped: `bpftool | grep -q` under pipefail can SIGPIPE.

@@ -28,8 +28,6 @@ struct options {
 	const char *cgroup_path;
 	const char *policy_path;
 	enum run_mode mode;
-	enum skb_direction direction;
-	bool direction_set;
 	bool verbose;
 	bool json;
 };
@@ -147,9 +145,7 @@ static void usage(FILE *out, const char *argv0)
 "Watches TLS ClientHellos and checks them against a policy.\n"
 "\n"
 "  -C, --container <name> watch this Docker container: its veth, ingress\n"
-"  -i, --iface <dev>     attach to <dev> instead\n"
-"  -d, --direction <d>   ingress (default on a veth) or egress (default\n"
-"                        elsewhere)\n"
+"  -i, --iface <dev>     attach to the ingress of <dev> instead\n"
 "  -c, --cgroup <path>   restrict enforcement to this cgroup v2 path\n"
 "                        (default with --container: the container's)\n"
 "  -p, --policy <file>   JSON policy file (see policy/README.md)\n"
@@ -176,7 +172,6 @@ static int parse_args(int argc, char **argv, struct options *opt)
 	static const struct option longopts[] = {
 		{ "container", required_argument, NULL, 'C' },
 		{ "iface",     required_argument, NULL, 'i' },
-		{ "direction", required_argument, NULL, 'd' },
 		{ "cgroup",    required_argument, NULL, 'c' },
 		{ "policy",    required_argument, NULL, 'p' },
 		{ "mode",      required_argument, NULL, 'm' },
@@ -188,23 +183,11 @@ static int parse_args(int argc, char **argv, struct options *opt)
 	};
 	int c;
 
-	while ((c = getopt_long(argc, argv, "C:i:d:c:p:m:f:vVh", longopts, NULL)) != -1) {
+	while ((c = getopt_long(argc, argv, "C:i:c:p:m:f:vVh", longopts, NULL)) != -1) {
 		switch (c) {
 		case 'C': opt->container = optarg; break;
 		case 'i': opt->ifname = optarg; break;
 		case 'c': opt->cgroup_path = optarg; break;
-		case 'd':
-			opt->direction_set = true;
-			if (strcmp(optarg, "egress") == 0) {
-				opt->direction = SKB_DIR_EGRESS;
-			} else if (strcmp(optarg, "ingress") == 0) {
-				opt->direction = SKB_DIR_INGRESS;
-			} else {
-				fprintf(stderr, "skbouncer: unknown direction '%s'\n",
-					optarg);
-				return -1;
-			}
-			break;
 		case 'p': opt->policy_path = optarg; break;
 		case 'f':
 			if (strcmp(optarg, "text") == 0) {
@@ -248,9 +231,6 @@ static int parse_args(int argc, char **argv, struct options *opt)
 /* Runs after --container has filled in -i and --cgroup. */
 static int check_args(struct options *opt)
 {
-	if (!opt->direction_set && opt->ifname && skb_enforce_is_veth(opt->ifname))
-		opt->direction = SKB_DIR_INGRESS;
-
 	if (opt->mode != MODE_ENFORCE)
 		return 0;
 	if (!opt->cgroup_path) {
@@ -290,7 +270,6 @@ static int setup(const struct options *opt, struct run_state *st)
 {
 	struct skb_loader_opts lopts = {
 		.ifname    = opt->ifname,
-		.direction = opt->direction,
 		.verbose   = opt->verbose,
 		.enforce   = st->enforce,
 		.on_event  = on_event,
@@ -334,7 +313,7 @@ static int setup(const struct options *opt, struct run_state *st)
 		fprintf(stderr, "skbouncer: cannot load policy into the kernel\n");
 		return -1;
 	}
-	if (opt->ifname && skb_loader_attach(st->ldr, opt->ifname, opt->direction))
+	if (opt->ifname && skb_loader_attach(st->ldr, opt->ifname))
 		return -1;
 	return 0;
 }
@@ -344,12 +323,11 @@ static void announce(const struct options *opt, const struct run_state *st)
 	const char *doing = st->enforce ? "enforcing on" : "watching";
 
 	if (opt->container)
-		fprintf(stderr, "skbouncer: %s container %s (%s %s); Ctrl-C to stop\n",
-			doing, opt->container, opt->ifname,
-			skb_direction_name(opt->direction));
+		fprintf(stderr, "skbouncer: %s container %s (%s ingress); Ctrl-C to stop\n",
+			doing, opt->container, opt->ifname);
 	else if (opt->ifname)
-		fprintf(stderr, "skbouncer: %s %s %s; Ctrl-C to stop\n", doing,
-			opt->ifname, skb_direction_name(opt->direction));
+		fprintf(stderr, "skbouncer: %s %s ingress; Ctrl-C to stop\n", doing,
+			opt->ifname);
 	else
 		fprintf(stderr, "skbouncer: loaded but not attached (pass --container "
 			"or -i); Ctrl-C to unload\n");

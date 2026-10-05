@@ -19,11 +19,6 @@ static const char *ip4(char buf[INET_ADDRSTRLEN], uint32_t be_addr)
 	return inet_ntop(AF_INET, &a, buf, INET_ADDRSTRLEN) ? buf : "?";
 }
 
-const char *skb_direction_name(uint8_t dir)
-{
-	return dir == SKB_DIR_INGRESS ? "ingress" : "egress";
-}
-
 /* Names short enough for one column. They are also the JSON `trunc` values. */
 static const char *trunc_name(uint8_t reason)
 {
@@ -183,11 +178,10 @@ void skb_event_print_json(FILE *out, const struct skb_event *ev,
 	char src[INET_ADDRSTRLEN], dst[INET_ADDRSTRLEN], when[48];
 	json_t *o;
 
-	o = json_pack("{s:I, s:I, s:s, s:I, s:s?, s:s, s:i, s:s, s:i, s:i, s:i, s:s,"
+	o = json_pack("{s:I, s:I, s:I, s:s?, s:s, s:i, s:s, s:i, s:i, s:i, s:s,"
 		      " s:i, s:i, s:o, s:o, s:b, s:b, s:b}",
 		"ktime_ns", (json_int_t)ev->ktime_ns,
 		"ifindex", (json_int_t)ev->ifindex,
-		"direction", skb_direction_name(ev->direction),
 		"cgroup_id", (json_int_t)ev->cgroup_id,
 		"container", container,
 		"saddr", ip4(src, ev->tuple.saddr),

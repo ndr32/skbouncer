@@ -44,10 +44,6 @@
 
 char LICENSE[] SEC("license") = "GPL";
 
-/* Set by the loader from --direction before the program loads. The program
- * has no way to ask the kernel which tcx hook it is on. */
-const volatile __u8 attach_dir = SKB_DIR_EGRESS;
-
 /* Enforce mode settings, set by the loader before the program loads. Only
  * sockets in the cgroup scope_id at depth scope_level, or below it, are
  * blocked. */
@@ -329,11 +325,12 @@ static __always_inline void count_short(struct __sk_buff *skb, __u32 pay_off,
 	bump(SKB_STAT_SHORT);
 }
 
-/* One program serves both tcx hooks. The parse does not depend on direction.
+/* Runs on tcx ingress of a container's veth, where the container's outgoing
+ * traffic arrives.
  *
  * The name must stay within 15 characters. BPF_OBJ_NAME_LEN is 16 including
  * the NUL, and bpftool shows a longer name truncated. */
-SEC("tcx/ingress")	/* the loader switches it to egress when asked */
+SEC("tcx/ingress")
 int skb_tc(struct __sk_buff *skb)
 {
 	void *data     = (void *)(long)skb->data;
@@ -450,7 +447,6 @@ int skb_tc(struct __sk_buff *skb)
 	ev->ktime_ns = bpf_ktime_get_ns();
 	ev->tuple = tuple;
 	ev->ifindex = skb->ifindex;
-	ev->direction = attach_dir;
 	ev->record_len = record_len;
 	ev->captured_len = captured_len;
 	ev->event_version = SKB_EVENT_VERSION;

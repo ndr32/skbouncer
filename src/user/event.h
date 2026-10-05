@@ -8,8 +8,6 @@
 
 #include "skbouncer.h"
 
-const char *skb_direction_name(uint8_t dir);
-
 /* Times are local wall clock. A NULL `verdict` and `reason` mean no policy
  * is loaded, and the column or key is left out. */
 void skb_event_header(FILE *out, bool verdict, bool action);

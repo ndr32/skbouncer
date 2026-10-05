@@ -12,7 +12,6 @@ struct skb_loader;
 
 struct skb_loader_opts {
 	const char *ifname;	/* NULL loads without attaching */
-	enum skb_direction direction;	/* which tcx hook on that device */
 	bool verbose;
 
 	/* Enforce mode. Blocks within the cgroup scope_id, at depth
@@ -30,8 +29,7 @@ struct skb_loader_opts {
 /* Loads the program. Attaching is a separate step, so enforce mode can fill
  * the policy maps first. */
 struct skb_loader *skb_loader_open(const struct skb_loader_opts *opts);
-int skb_loader_attach(struct skb_loader *ldr, const char *ifname,
-		      enum skb_direction dir);
+int skb_loader_attach(struct skb_loader *ldr, const char *ifname);
 
 /* The compiled policy. Each returns 0 or a negative errno. */
 int skb_loader_set_rule(struct skb_loader *ldr, uint32_t slot,

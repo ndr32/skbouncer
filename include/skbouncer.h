@@ -9,7 +9,7 @@
 #endif
 
 /* Bump on any layout change to struct skb_event. */
-#define SKB_EVENT_VERSION 7
+#define SKB_EVENT_VERSION 8
 
 #define SKB_MAX_CIPHERS   64	/* the verifier requires a bounded walk */
 #define SKB_MAX_VERSIONS  8
@@ -41,17 +41,6 @@ enum skb_stat {
 	SKB_STAT_DROPPED,	/* bpf_ringbuf_reserve() returned NULL */
 	SKB_STAT_SHORT,		/* a 1 to 5 byte segment that starts a handshake record, too short to classify */
 	SKB_STAT__MAX,
-};
-
-/* The tcx hook the program is attached to. A bridged container's outgoing
- * traffic arrives as ingress on the host end of its veth, still carrying the
- * container's own address before NAT. At the physical interface the same
- * packet has been forwarded and SNATed, and it no longer carries a cgroup
- * id. Containers that share a network namespace share one veth. cgroup_id
- * names the container. */
-enum skb_direction {
-	SKB_DIR_EGRESS = 0,
-	SKB_DIR_INGRESS,
 };
 
 /* Lists the walk read in full. trunc_reason records that the record was cut.
@@ -111,15 +100,21 @@ struct skb_tuple {
 	__u16 dport;
 };
 
-/* New fields go at the end. The field order leaves no implicit padding on
- * x86_64. */
+/* One ClientHello, seen as ingress on the host end of a container's veth. A
+ * bridged container's outgoing traffic arrives there still carrying the
+ * container's own address before NAT. At the physical interface the same
+ * packet has been forwarded and SNATed, and it no longer carries a cgroup
+ * id. Containers that share a network namespace share one veth, so
+ * cgroup_id names the container.
+ *
+ * The field order leaves no implicit padding on x86_64. */
 struct skb_event {
 	__u64 cgroup_id;
 	__u64 ktime_ns;		/* CLOCK_MONOTONIC, unaffected by NTP steps */
 
 	struct skb_tuple tuple;
 
-	__u32 ifindex;		/* device the hook is attached to */
+	__u32 ifindex;		/* the veth the program is attached to */
 
 	__u16 record_len;
 	__u16 captured_len;
@@ -127,20 +122,17 @@ struct skb_event {
 	__u16 legacy_version;
 
 	__u8  trunc_reason;
-	__u8  direction;	/* enum skb_direction */
 	__u8  event_version;
 	__u8  n_ciphers;	/* entries filled in ciphers[] */
 	__u8  n_versions;	/* entries filled in versions[]; 0 = absent */
 	__u8  ciphers_capped;	/* offered more than SKB_MAX_CIPHERS */
 	__u8  seen;		/* enum skb_seen */
 	__u8  action;		/* enum skb_action */
+	__u8  verdict;		/* enum skb_verdict. The kernel's, enforce mode only. */
 
 	/* Wire order and big-endian. Userspace converts them. */
 	__u16 ciphers[SKB_MAX_CIPHERS];
 	__u16 versions[SKB_MAX_VERSIONS];
-
-	__u8  verdict;		/* enum skb_verdict. The kernel's verdict, set in enforce mode only. */
-	__u8  _pad[7];
 };
 
 #endif /* SKBOUNCER_H */
