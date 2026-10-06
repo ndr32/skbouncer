@@ -306,8 +306,8 @@ static int setup(const struct options *opt, struct run_state *st)
 		return -1;
 	/* The policy maps are filled before the attach. An empty map would
 	 * let every ClientHello through. */
-	if (st->enforce && skb_enforce_sync(st->ldr, st->policy, st->containers,
-					    st->scope)) {
+	if (st->enforce && (skb_enforce_load_rules(st->ldr, st->policy) ||
+			    skb_enforce_sync(st->ldr, st->policy, st->containers, st->scope))) {
 		fprintf(stderr, "skbouncer: cannot load policy into the kernel\n");
 		return -1;
 	}
