@@ -302,8 +302,10 @@ static int setup(const struct options *opt, struct run_state *st)
 		fprintf(stderr, "skbouncer: cannot list containers via "
 			"/var/run/docker.sock; container names unavailable\n");
 
-	if (!(st->ldr = skb_loader_open(&lopts)))
+	if (!(st->ldr = skb_loader_open(&lopts, errbuf, sizeof(errbuf)))) {
+		fprintf(stderr, "skbouncer: %s\n", errbuf);
 		return -1;
+	}
 	/* The policy maps are filled before the attach. An empty map would
 	 * let every ClientHello through. */
 	if (st->enforce && (skb_enforce_load_rules(st->ldr, st->policy) ||
@@ -311,8 +313,10 @@ static int setup(const struct options *opt, struct run_state *st)
 		fprintf(stderr, "skbouncer: cannot load policy into the kernel\n");
 		return -1;
 	}
-	if (opt->ifname && skb_loader_attach(st->ldr, opt->ifname))
+	if (opt->ifname && skb_loader_attach(st->ldr, opt->ifname, errbuf, sizeof(errbuf))) {
+		fprintf(stderr, "skbouncer: %s\n", errbuf);
 		return -1;
+	}
 	return 0;
 }
 
