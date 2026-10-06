@@ -119,15 +119,16 @@ void skb_event_print(FILE *out, const struct skb_event *ev, const char *containe
 {
 	char src[INET_ADDRSTRLEN], dst[INET_ADDRSTRLEN];
 	char sbuf[INET_ADDRSTRLEN + 8], dbuf[INET_ADDRSTRLEN + 8];
-	char who[32], tls[32], bytes[24], ciphers[80];
+	char cg[32], tls[32], bytes[24], ciphers[80];
+	const char *who = container;
 	struct timespec ts = wall_time(ev->ktime_ns);
 	struct tm tm;
 
 	localtime_r(&ts.tv_sec, &tm);
-	if (container)
-		snprintf(who, sizeof(who), "%s", container);
-	else
-		snprintf(who, sizeof(who), "cgroup %llu", (unsigned long long)ev->cgroup_id);
+	if (!container) {
+		snprintf(cg, sizeof(cg), "cgroup %llu", (unsigned long long)ev->cgroup_id);
+		who = cg;
+	}
 	snprintf(sbuf, sizeof(sbuf), "%s:%u", ip4(src, ev->tuple.saddr),
 		 ntohs(ev->tuple.sport));
 	snprintf(dbuf, sizeof(dbuf), "%s:%u", ip4(dst, ev->tuple.daddr),

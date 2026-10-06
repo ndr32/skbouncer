@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 #include <errno.h>
 #include <getopt.h>
+#include <limits.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -15,6 +16,9 @@
 #include "loader.h"
 #include "policy.h"
 #include "version.h"
+
+/* Room for a path and the sentence around it. */
+#define ERRBUF_LEN (PATH_MAX + 256)
 
 enum run_mode {
 	MODE_AUDIT = 0,
@@ -81,7 +85,7 @@ static void on_event(void *ctx, const struct skb_event *ev)
 {
 	struct run_state *st = ctx;
 	const char *name = skb_container_lookup(st->containers, ev->cgroup_id);
-	char why[160];
+	char why[SKB_REASON_MAX];
 	enum skb_verdict v = st->policy ?
 		skb_policy_explain(st->policy, ev, name, why, sizeof(why)) : 0;
 	const char *verdict = st->policy ? skb_verdict_str(v) : NULL;
@@ -252,7 +256,7 @@ static int check_args(struct options *opt)
 
 static int resolve_container(struct options *opt)
 {
-	char errbuf[512];
+	char errbuf[ERRBUF_LEN];
 
 	if (skb_container_resolve(opt->container, &opt->cinfo, errbuf, sizeof(errbuf))) {
 		fprintf(stderr, "skbouncer: %s\n", errbuf);
@@ -275,7 +279,7 @@ static int setup(const struct options *opt, struct run_state *st)
 		.on_event  = on_event,
 		.ctx       = st,
 	};
-	char errbuf[512];
+	char errbuf[ERRBUF_LEN];
 
 	/* The policy loads first, so a bad policy file fails before anything
 	 * enters the kernel. */
