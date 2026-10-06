@@ -20,18 +20,13 @@
 /* Room for a path and the sentence around it. */
 #define ERRBUF_LEN (PATH_MAX + 256)
 
-enum run_mode {
-	MODE_AUDIT = 0,
-	MODE_ENFORCE,
-};
-
 struct options {
 	const char *container;
 	struct skb_container_info cinfo;	/* what --container resolved to */
 	const char *ifname;
 	const char *cgroup_path;
 	const char *policy_path;
-	enum run_mode mode;
+	bool enforce;
 	bool verbose;
 	bool json;
 };
@@ -171,6 +166,18 @@ static void usage(FILE *out, const char *argv0)
 		argv0, argv0);
 }
 
+/* `arg` must be `no` or `yes`. Sets *on to whether it is `yes`. */
+static bool either(const char *arg, const char *no, const char *yes, bool *on,
+		   const char *option)
+{
+	if (strcmp(arg, no) != 0 && strcmp(arg, yes) != 0) {
+		fprintf(stderr, "skbouncer: unknown %s '%s'\n", option, arg);
+		return false;
+	}
+	*on = strcmp(arg, yes) == 0;
+	return true;
+}
+
 static int parse_args(int argc, char **argv, struct options *opt)
 {
 	static const struct option longopts[] = {
@@ -194,28 +201,15 @@ static int parse_args(int argc, char **argv, struct options *opt)
 		case 'c': opt->cgroup_path = optarg; break;
 		case 'p': opt->policy_path = optarg; break;
 		case 'f':
-			if (strcmp(optarg, "text") == 0) {
-				opt->json = false;
-			} else if (strcmp(optarg, "json") == 0) {
-				opt->json = true;
-			} else {
-				fprintf(stderr, "skbouncer: unknown format '%s'\n",
-					optarg);
+			if (!either(optarg, "text", "json", &opt->json, "format"))
 				return -1;
-			}
 			break;
 		case 'v': opt->verbose = true; break;
 		case 'h': usage(stdout, argv[0]); exit(EXIT_SUCCESS);
 		case 'V': printf("skbouncer %s\n", SKB_VERSION); exit(EXIT_SUCCESS);
 		case 'm':
-			if (strcmp(optarg, "audit") == 0) {
-				opt->mode = MODE_AUDIT;
-			} else if (strcmp(optarg, "enforce") == 0) {
-				opt->mode = MODE_ENFORCE;
-			} else {
-				fprintf(stderr, "skbouncer: unknown mode '%s'\n", optarg);
+			if (!either(optarg, "audit", "enforce", &opt->enforce, "mode"))
 				return -1;
-			}
 			break;
 		default:
 			return -1;
@@ -235,7 +229,7 @@ static int parse_args(int argc, char **argv, struct options *opt)
 /* Runs after --container has filled in -i and --cgroup. */
 static int check_args(struct options *opt)
 {
-	if (opt->mode != MODE_ENFORCE)
+	if (!opt->enforce)
 		return 0;
 	if (!opt->cgroup_path) {
 		fprintf(stderr, "skbouncer: enforce mode requires --cgroup\n");
@@ -391,7 +385,7 @@ static void teardown(struct run_state *st)
 
 int main(int argc, char **argv)
 {
-	struct options opt = { .mode = MODE_AUDIT };
+	struct options opt = {};
 	struct run_state st = {};
 	int rc = EXIT_FAILURE;
 
@@ -409,7 +403,7 @@ int main(int argc, char **argv)
 		return EXIT_FAILURE;
 
 	st.json = opt.json;
-	st.enforce = opt.mode == MODE_ENFORCE;
+	st.enforce = opt.enforce;
 	if (setup(&opt, &st) == 0 && catch_signals() == 0) {
 		announce(&opt, &st);
 		rc = run(&st);
