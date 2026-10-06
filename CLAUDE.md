@@ -122,7 +122,8 @@ OUT: decryption, IPv6 (connect4 is v4-only), Kubernetes / multi-host, Encrypted 
        `direction` field; SKB_EVENT_VERSION 8). When the round ends: tag eval-2, rerun the
        whole campaign, regenerate eval/results with eval/score.py and eval/workbook.py.
        The M7 verifiers check the tool against the latest eval-* tag; before
-       tagging, run them with FREEZE_REF=HEAD.  <- CURRENT
+       tagging, run them with FREEZE_REF=HEAD. Tagged eval-2 and measured on
+       2026-10-06; results in eval/results/eval-2/. All scored criteria met.  <- CURRENT
 
 Build each milestone so it loads and runs before starting the next.
 

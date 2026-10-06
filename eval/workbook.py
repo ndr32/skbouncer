@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Builds eval/results/skbouncer-eval-1.1.xlsx: data sheets from the raw results
+"""Builds eval/results/<tag>/skbouncer-<tag>.xlsx: data sheets from the raw results
 and a Criteria sheet whose figures are formulas over them.
 
 usage: eval/workbook.py RESULTS OUT.xlsx   (needs openpyxl; RESULTS as for eval/score.py)"""
@@ -257,7 +257,7 @@ ws7, c7, n7 = sheet("Exp7", ["Containers in run", "Container", "Shares a namespa
                              "Handshakes ok", "Events", "Events naming it", "Unnamed events"], rows7, {"Container": 28})
 
 # -- Environment and About ----------------------------------------------------
-env = [l.split(": ", 1) for l in (R / "env-eval-1.1.txt").read_text().splitlines() if ": " in l]
+env = [l.split(": ", 1) for l in (R / f"env-{score.label(R)}.txt").read_text().splitlines() if ": " in l]
 sheet("Environment", ["Item", "Value"], env, {"Item": 34, "Value": 90})
 
 # -- Criteria -----------------------------------------------------------------
@@ -337,8 +337,8 @@ wsC.freeze_panes = "A2"
 wsC["D11"].comment = Comment("H2 and H3 hold. Per client and arm shares in Exp4_coverage.", "eval")
 
 about = [
-    ["Source", "eval/results/results-eval-1.1.tar.xz (SHA-256 02a946ed...7a27), tag eval-1.1"],
-    ["Run", "2026-10-03 on EC2 c7i.2xlarge, ap-southeast-1, kernel 7.0.0-1013-aws (sheet Environment)"],
+    ["Source", f"eval/results/results-{score.label(R)}.tar.xz, tag {score.label(R)}"],
+    ["Run", f"{dict(env).get('date', '?')[:10]} on {dict(env).get('instance', '?')}, kernel {dict(env).get('kernel', '?')} (sheet Environment)"],
     ["Criteria", "eval/PLAN.md. Figures on the Criteria sheet are formulas over the data sheets."],
     ["Reference verdicts", "eval/score.py reference_verdict(): policy/README.md applied to the server's own decode"],
     ["Grades", "Durumeric et al., NDSS 2017, section V-A; cipher properties from IANA's registry"],

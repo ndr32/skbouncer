@@ -1,0 +1,1063 @@
+{
+ "exp1": {
+  "rows": {
+   "1": true,
+   "2": true,
+   "3": true,
+   "4": true,
+   "5": true,
+   "6": true,
+   "7": true,
+   "8": true,
+   "9": true,
+   "10": true,
+   "11": true,
+   "12": true,
+   "13": true,
+   "14": true
+  },
+  "c3": {
+   "ssh_connections": 1,
+   "random_connections": 100,
+   "events": 0,
+   "connections_received": 101,
+   "bytes_received": 409621
+  },
+  "chain": true
+ },
+ "exp3": {
+  "connections": 500,
+  "reported": 500,
+  "cipher_lists": [
+   490,
+   490
+  ],
+  "version_lists": [
+   409,
+   409
+  ],
+  "false_certain": 0,
+  "named": [
+   500,
+   500
+  ],
+  "verdicts": [
+   463,
+   463
+  ],
+  "unknown": 37
+ },
+ "fuzz": {
+  "mutants": 5000,
+  "with_events": 4688,
+  "false_complete": 0,
+  "alive": true,
+  "attached": 1,
+  "short": 8
+ },
+ "exp4": {
+  "arms": [
+   "1280-off",
+   "1280-on",
+   "1400-on",
+   "1460-on",
+   "1500-off",
+   "1500-on"
+  ],
+  "split": [
+   955,
+   955
+  ],
+  "fits_flagged": [
+   0,
+   485
+  ],
+  "h1_exceptions": [
+   "openssl MLKEM768 (pure PQ) at 1500-off: fits"
+  ],
+  "h2_varies": [],
+  "h3_ciphers_cut": 0,
+  "decidable": {
+   "openssl 3.5.8 default": {
+    "1280-off": [
+     5,
+     5
+    ],
+    "1280-on": [
+     20,
+     20
+    ],
+    "1400-on": [
+     5,
+     5
+    ],
+    "1460-on": [
+     5,
+     5
+    ],
+    "1500-off": [
+     5,
+     5
+    ],
+    "1500-on": [
+     20,
+     20
+    ]
+   },
+   "openssl X25519 only (classical)": {
+    "1280-off": [
+     5,
+     5
+    ],
+    "1280-on": [
+     20,
+     20
+    ],
+    "1400-on": [
+     5,
+     5
+    ],
+    "1460-on": [
+     5,
+     5
+    ],
+    "1500-off": [
+     5,
+     5
+    ],
+    "1500-on": [
+     20,
+     20
+    ]
+   },
+   "openssl secp256r1 only (classical)": {
+    "1280-off": [
+     5,
+     5
+    ],
+    "1280-on": [
+     20,
+     20
+    ],
+    "1400-on": [
+     5,
+     5
+    ],
+    "1460-on": [
+     5,
+     5
+    ],
+    "1500-off": [
+     5,
+     5
+    ],
+    "1500-on": [
+     20,
+     20
+    ]
+   },
+   "openssl X25519MLKEM768 only": {
+    "1280-off": [
+     5,
+     5
+    ],
+    "1280-on": [
+     20,
+     20
+    ],
+    "1400-on": [
+     5,
+     5
+    ],
+    "1460-on": [
+     5,
+     5
+    ],
+    "1500-off": [
+     5,
+     5
+    ],
+    "1500-on": [
+     20,
+     20
+    ]
+   },
+   "openssl SecP256r1MLKEM768": {
+    "1280-off": [
+     5,
+     5
+    ],
+    "1280-on": [
+     20,
+     20
+    ],
+    "1400-on": [
+     5,
+     5
+    ],
+    "1460-on": [
+     5,
+     5
+    ],
+    "1500-off": [
+     5,
+     5
+    ],
+    "1500-on": [
+     20,
+     20
+    ]
+   },
+   "openssl SecP384r1MLKEM1024": {
+    "1280-off": [
+     5,
+     5
+    ],
+    "1280-on": [
+     20,
+     20
+    ],
+    "1400-on": [
+     5,
+     5
+    ],
+    "1460-on": [
+     5,
+     5
+    ],
+    "1500-off": [
+     5,
+     5
+    ],
+    "1500-on": [
+     20,
+     20
+    ]
+   },
+   "openssl MLKEM768 (pure PQ)": {
+    "1280-off": [
+     5,
+     5
+    ],
+    "1280-on": [
+     20,
+     20
+    ],
+    "1400-on": [
+     5,
+     5
+    ],
+    "1460-on": [
+     5,
+     5
+    ],
+    "1500-off": [
+     5,
+     5
+    ],
+    "1500-on": [
+     20,
+     20
+    ]
+   },
+   "openssl MLKEM1024 (pure PQ)": {
+    "1280-off": [
+     5,
+     5
+    ],
+    "1280-on": [
+     20,
+     20
+    ],
+    "1400-on": [
+     5,
+     5
+    ],
+    "1460-on": [
+     5,
+     5
+    ],
+    "1500-off": [
+     5,
+     5
+    ],
+    "1500-on": [
+     20,
+     20
+    ]
+   },
+   "openssl TLS 1.2 only": {
+    "1280-off": [
+     5,
+     5
+    ],
+    "1280-on": [
+     20,
+     20
+    ],
+    "1400-on": [
+     5,
+     5
+    ],
+    "1460-on": [
+     5,
+     5
+    ],
+    "1500-off": [
+     5,
+     5
+    ],
+    "1500-on": [
+     20,
+     20
+    ]
+   },
+   "curl 8.22 (OpenSSL 3.5.8)": {
+    "1280-off": [
+     5,
+     5
+    ],
+    "1280-on": [
+     20,
+     20
+    ],
+    "1400-on": [
+     5,
+     5
+    ],
+    "1460-on": [
+     5,
+     5
+    ],
+    "1500-off": [
+     5,
+     5
+    ],
+    "1500-on": [
+     20,
+     20
+    ]
+   },
+   "python 3.14 urllib (OpenSSL 3.5.8)": {
+    "1280-off": [
+     5,
+     5
+    ],
+    "1280-on": [
+     20,
+     20
+    ],
+    "1400-on": [
+     5,
+     5
+    ],
+    "1460-on": [
+     5,
+     5
+    ],
+    "1500-off": [
+     5,
+     5
+    ],
+    "1500-on": [
+     20,
+     20
+    ]
+   },
+   "node 26 https (OpenSSL 3.5.8)": {
+    "1280-off": [
+     5,
+     5
+    ],
+    "1280-on": [
+     20,
+     20
+    ],
+    "1400-on": [
+     5,
+     5
+    ],
+    "1460-on": [
+     5,
+     5
+    ],
+    "1500-off": [
+     5,
+     5
+    ],
+    "1500-on": [
+     20,
+     20
+    ]
+   },
+   "go 1.27 net/http (crypto/tls)": {
+    "1280-off": [
+     5,
+     5
+    ],
+    "1280-on": [
+     20,
+     20
+    ],
+    "1400-on": [
+     5,
+     5
+    ],
+    "1460-on": [
+     5,
+     5
+    ],
+    "1500-off": [
+     5,
+     5
+    ],
+    "1500-on": [
+     20,
+     20
+    ]
+   },
+   "browser chrome116": {
+    "1280-off": [
+     5,
+     5
+    ],
+    "1280-on": [
+     20,
+     20
+    ],
+    "1400-on": [
+     5,
+     5
+    ],
+    "1460-on": [
+     5,
+     5
+    ],
+    "1500-off": [
+     5,
+     5
+    ],
+    "1500-on": [
+     20,
+     20
+    ]
+   },
+   "browser chrome124": {
+    "1280-off": [
+     1,
+     5
+    ],
+    "1280-on": [
+     10,
+     20
+    ],
+    "1400-on": [
+     1,
+     5
+    ],
+    "1460-on": [
+     2,
+     5
+    ],
+    "1500-off": [
+     2,
+     5
+    ],
+    "1500-on": [
+     9,
+     20
+    ]
+   },
+   "browser chrome131": {
+    "1280-off": [
+     2,
+     5
+    ],
+    "1280-on": [
+     13,
+     20
+    ],
+    "1400-on": [
+     1,
+     5
+    ],
+    "1460-on": [
+     2,
+     5
+    ],
+    "1500-off": [
+     2,
+     5
+    ],
+    "1500-on": [
+     8,
+     20
+    ]
+   },
+   "browser chrome150": {
+    "1280-off": [
+     4,
+     5
+    ],
+    "1280-on": [
+     9,
+     20
+    ],
+    "1400-on": [
+     1,
+     5
+    ],
+    "1460-on": [
+     0,
+     5
+    ],
+    "1500-off": [
+     5,
+     5
+    ],
+    "1500-on": [
+     12,
+     20
+    ]
+   },
+   "browser edge101": {
+    "1280-off": [
+     5,
+     5
+    ],
+    "1280-on": [
+     20,
+     20
+    ],
+    "1400-on": [
+     5,
+     5
+    ],
+    "1460-on": [
+     5,
+     5
+    ],
+    "1500-off": [
+     5,
+     5
+    ],
+    "1500-on": [
+     20,
+     20
+    ]
+   },
+   "browser firefox133": {
+    "1280-off": [
+     0,
+     5
+    ],
+    "1280-on": [
+     0,
+     20
+    ],
+    "1400-on": [
+     0,
+     5
+    ],
+    "1460-on": [
+     0,
+     5
+    ],
+    "1500-off": [
+     0,
+     5
+    ],
+    "1500-on": [
+     0,
+     20
+    ]
+   },
+   "browser firefox147": {
+    "1280-off": [
+     0,
+     5
+    ],
+    "1280-on": [
+     0,
+     20
+    ],
+    "1400-on": [
+     0,
+     5
+    ],
+    "1460-on": [
+     0,
+     5
+    ],
+    "1500-off": [
+     0,
+     5
+    ],
+    "1500-on": [
+     0,
+     20
+    ]
+   },
+   "browser safari184": {
+    "1280-off": [
+     5,
+     5
+    ],
+    "1280-on": [
+     20,
+     20
+    ],
+    "1400-on": [
+     5,
+     5
+    ],
+    "1460-on": [
+     5,
+     5
+    ],
+    "1500-off": [
+     5,
+     5
+    ],
+    "1500-on": [
+     20,
+     20
+    ]
+   },
+   "browser safari260": {
+    "1280-off": [
+     0,
+     5
+    ],
+    "1280-on": [
+     0,
+     20
+    ],
+    "1400-on": [
+     0,
+     5
+    ],
+    "1460-on": [
+     0,
+     5
+    ],
+    "1500-off": [
+     0,
+     5
+    ],
+    "1500-on": [
+     0,
+     20
+    ]
+   },
+   "browser safari260_ios": {
+    "1280-off": [
+     5,
+     5
+    ],
+    "1280-on": [
+     20,
+     20
+    ],
+    "1400-on": [
+     5,
+     5
+    ],
+    "1460-on": [
+     5,
+     5
+    ],
+    "1500-off": [
+     5,
+     5
+    ],
+    "1500-on": [
+     20,
+     20
+    ]
+   },
+   "browser tor145": {
+    "1280-off": [
+     5,
+     5
+    ],
+    "1280-on": [
+     20,
+     20
+    ],
+    "1400-on": [
+     5,
+     5
+    ],
+    "1460-on": [
+     5,
+     5
+    ],
+    "1500-off": [
+     5,
+     5
+    ],
+    "1500-on": [
+     20,
+     20
+    ]
+   }
+  }
+ },
+ "exp5": {
+  "cps": {
+   "off": 610.0554999999999,
+   "audit": 608.679,
+   "enforce": 610.152
+  },
+  "ns_per_call": {
+   "audit": 649.121359393064,
+   "enforce": 737.9039349765152
+  },
+  "gbps": {
+   "off": 54.5335,
+   "audit": 53.2957,
+   "enforce": 55.5071
+  },
+  "latency_ms": {
+   "off": [
+    1.4892,
+    2.0026
+   ],
+   "audit": [
+    1.4994,
+    2.0065
+   ],
+   "enforce": [
+    1.4994,
+    2.0483
+   ]
+  },
+  "policy_cps": {
+   "1 rules, 1 ciphers": 643.741,
+   "1 rules, 30 ciphers": 614.768,
+   "16 rules, 30 ciphers": 611.841,
+   "64 rules, 30 ciphers": 620.348
+  },
+  "dropped": 0,
+  "saturation": [
+   [
+    1,
+    613,
+    0
+   ],
+   [
+    2,
+    734,
+    0
+   ],
+   [
+    4,
+    726,
+    0
+   ],
+   [
+    8,
+    675,
+    0
+   ]
+  ],
+  "footprint": {
+   "prog": {
+    "bytes_xlated": 4336,
+    "bytes_jited": 2427,
+    "verified_insns": 13431
+   },
+   "verified_insns_from": "bpftool -d prog load, rodata defaults (audit)",
+   "maps": [
+    {
+     "name": "events",
+     "type": "ringbuf",
+     "bytes_memlock": 275776
+    },
+    {
+     "name": "scratch",
+     "type": "percpu_array",
+     "bytes_memlock": 1848
+    },
+    {
+     "name": "cgroup_rule",
+     "type": "hash",
+     "bytes_memlock": 329152
+    },
+    {
+     "name": "rules",
+     "type": "array",
+     "bytes_memlock": 533304
+    },
+    {
+     "name": "stats",
+     "type": "array",
+     "bytes_memlock": 328
+    },
+    {
+     "name": "skbounce.rodata",
+     "type": "array",
+     "bytes_memlock": 8192
+    }
+   ],
+   "rss_kib": 13176,
+   "cpu_seconds": 0.68,
+   "seconds": 20
+  }
+ },
+ "exp6": {
+  "rows": 72,
+  "agree": 72,
+  "fail_open": 4,
+  "scenarios": {
+   "legacy": [
+    "violation",
+    true
+   ],
+   "cbc_sha1": [
+    "violation",
+    true
+   ],
+   "pq_unknown": [
+    "unknown",
+    true
+   ]
+  },
+  "waits": {
+   "openssl 3.5.8 default": [
+    300.04,
+    true
+   ],
+   "openssl X25519 only (classical)": [
+    300.04,
+    true
+   ],
+   "openssl secp256r1 only (classical)": [
+    300.04,
+    true
+   ],
+   "openssl X25519MLKEM768 only": [
+    300.05,
+    true
+   ],
+   "openssl SecP256r1MLKEM768": [
+    300.05,
+    true
+   ],
+   "openssl SecP384r1MLKEM1024": [
+    300.04,
+    true
+   ],
+   "openssl MLKEM768 (pure PQ)": [
+    300.04,
+    true
+   ],
+   "openssl MLKEM1024 (pure PQ)": [
+    300.05,
+    true
+   ],
+   "openssl TLS 1.2 only": [
+    300.04,
+    true
+   ],
+   "curl 8.22 (OpenSSL 3.5.8)": [
+    5.01,
+    false
+   ],
+   "python 3.14 urllib (OpenSSL 3.5.8)": [
+    5.5,
+    false
+   ],
+   "node 26 https (OpenSSL 3.5.8)": [
+    300.04,
+    true
+   ],
+   "go 1.27 net/http (crypto/tls)": [
+    5.06,
+    false
+   ],
+   "browser chrome116": [
+    5.01,
+    false
+   ],
+   "browser chrome124": [
+    5.0,
+    false
+   ],
+   "browser chrome131": [
+    5.01,
+    false
+   ],
+   "browser chrome150": [
+    0.01,
+    false
+   ],
+   "browser edge101": [
+    5.01,
+    false
+   ],
+   "browser firefox133": [
+    0.02,
+    false
+   ],
+   "browser firefox147": [
+    0.02,
+    false
+   ],
+   "browser safari184": [
+    5.0,
+    false
+   ],
+   "browser safari260": [
+    0.01,
+    false
+   ],
+   "browser safari260_ios": [
+    5.01,
+    false
+   ],
+   "browser tor145": [
+    5.0,
+    false
+   ]
+  }
+ },
+ "exp7": {
+  "n10": {
+   "events": 50,
+   "correct": 50,
+   "unnamed": 0
+  },
+  "n50": {
+   "events": 250,
+   "correct": 250,
+   "unnamed": 0
+  }
+ },
+ "exp8": {
+  "agree": 206,
+  "total": 206,
+  "grades": {
+   "openssl 3.5.8 default": [
+    "A"
+   ],
+   "openssl X25519 only (classical)": [
+    "A"
+   ],
+   "openssl secp256r1 only (classical)": [
+    "A"
+   ],
+   "openssl X25519MLKEM768 only": [
+    "A"
+   ],
+   "openssl SecP256r1MLKEM768": [
+    "A"
+   ],
+   "openssl SecP384r1MLKEM1024": [
+    "A"
+   ],
+   "openssl MLKEM768 (pure PQ)": [
+    "A"
+   ],
+   "openssl MLKEM1024 (pure PQ)": [
+    "A"
+   ],
+   "openssl TLS 1.2 only": [
+    "A"
+   ],
+   "curl 8.22 (OpenSSL 3.5.8)": [
+    "A"
+   ],
+   "python 3.14 urllib (OpenSSL 3.5.8)": [
+    "A"
+   ],
+   "node 26 https (OpenSSL 3.5.8)": [
+    "A"
+   ],
+   "go 1.27 net/http (crypto/tls)": [
+    "A"
+   ],
+   "browser chrome116": [
+    "A"
+   ],
+   "browser chrome124": [
+    "A"
+   ],
+   "browser chrome131": [
+    "A"
+   ],
+   "browser chrome150": [
+    "A"
+   ],
+   "browser edge101": [
+    "A"
+   ],
+   "browser firefox133": [
+    "A"
+   ],
+   "browser firefox147": [
+    "A"
+   ],
+   "browser safari184": [
+    "A"
+   ],
+   "browser safari260": [
+    "A"
+   ],
+   "browser safari260_ios": [
+    "A"
+   ],
+   "browser tor145": [
+    "A"
+   ],
+   "openssl 83 ciphers (TLS 1.2, ALL:@SECLEVEL=0)": [
+    "F"
+   ]
+  },
+  "partial": {
+   "browser chrome124": [
+    [
+     "A",
+     "A"
+    ]
+   ],
+   "browser chrome131": [
+    [
+     "A",
+     "A"
+    ]
+   ],
+   "browser chrome150": [
+    [
+     "A",
+     "A"
+    ]
+   ],
+   "browser firefox133": [
+    [
+     "A",
+     "A"
+    ]
+   ],
+   "browser firefox147": [
+    [
+     "A",
+     "A"
+    ]
+   ],
+   "browser safari260": [
+    [
+     "A",
+     "A"
+    ]
+   ],
+   "openssl 83 ciphers (TLS 1.2, ALL:@SECLEVEL=0)": [
+    [
+     "F",
+     "F"
+    ]
+   ]
+  }
+ }
+}

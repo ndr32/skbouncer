@@ -1,14 +1,24 @@
-# Campaign results, eval-1.1
+# Campaign results
 
-`results-eval-1.1.tar.xz` holds every raw result of the chapter 4 campaign,
-run on 2026-10-03 on EC2 (c7i.2xlarge, ap-southeast-1, kernel
-7.0.0-1013-aws) from tag `eval-1.1`. The environment is recorded in
-`results/env-eval-1.1.txt` inside the archive, and again in each run's
-`env.txt`.
+Two campaigns, each run on EC2 (c7i.2xlarge, ap-southeast-1, kernel
+7.0.0-1013-aws) with the same harnesses and settings.
 
-SHA-256 `02a946ed7776b0d36f68eb1db446b32afc1f3eb87f10c8652a3a832ffacd7a27`,
-18 MB compressed, 660 MB unpacked. Unpack with
-`tar -xJf results-eval-1.1.tar.xz` (outside the repo).
+| Tag | Run | Archive | SHA-256 | Scored |
+|---|---|---|---|---|
+| `eval-1.1` | 2026-10-03 | `results-eval-1.1.tar.xz` (18 MB) | `02a946ed...7a27` | `eval-1.1/` |
+| `eval-2` | 2026-10-06 | `results-eval-2.tar.xz` (17 MB) | `9edec910...8f52` | `eval-2/` |
+
+`eval-2` is `eval-1.1` with egress removed, the de-slop review applied and the
+code review's fixes. Each scored folder holds `criteria.md` and `scores.json`
+from `eval/score.py`, and `skbouncer-<tag>.xlsx` from `eval/workbook.py`.
+
+The EC2 instance ran 18% slower in the `eval-2` campaign: 610 handshakes per
+second with skbouncer off, against 747 in `eval-1.1`. Compare overheads within
+a campaign, never absolute figures across the two.
+
+Unpack an archive with `tar -xJf results-<tag>.tar.xz` (outside the repo). The
+environment is in `results/env-<tag>.txt` inside it, and in each run's
+`env.txt`. Both archives share this layout.
 
 | Directory | Experiment | Harness and settings |
 |---|---|---|
