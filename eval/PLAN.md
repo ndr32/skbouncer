@@ -63,7 +63,9 @@ now so the results cannot move them.
 
 ## Before any run
 
-- Tag the measured commit `eval-1`. No code changes after the tag.
+- The measured code is tagged: `eval-1.1` ran on 3 Oct, and `eval-2`, the final
+  code, on 6 Oct. No code changes after a tag. A fix means a new tag and a
+  rerun of every experiment it could affect.
 - Every experiment runs on the EC2 instance: c7i.2xlarge, ap-southeast-1,
   Ubuntu 26.04.1, kernel 7.0.0-1013-aws (held). Harnesses are built and
   checked on the development VM, which has the same toolchain and identical
@@ -123,16 +125,22 @@ up.
 segment gets an algorithm level flowchart, a line by line explanation and a
 screenshot of its output.
 
-- System level flowchart. Packet reaches the veth, `skb_tc()` runs,
-  `not_a_hello()` filters, `walk_hello()` reads, `check_policy()` judges,
-  the packet is dropped or passed, the event goes to the ring buffer, and
-  userspace names the container and prints the line.
+- System level flowchart. Packet reaches the veth and `skb_tc()` runs.
+  `read_headers()` reads the headers and clamps to one segment,
+  `is_client_hello()` and `not_a_hello()` filter, `fill_event()` and
+  `walk_hello()` read, `judge()` and `check_policy()` decide, the packet is
+  dropped or passed, the event goes to the ring buffer, and userspace names
+  the container and prints the line.
 - Segment A. `not_a_hello()`. A decision chain of three structural checks
   that rejects bytes resembling a TLS record.
-- Segment B. `walk_hello()`. The bounded walk over the cipher list (capped at
-  64) and the extensions, the GREASE skip, and the truncation reason.
-- Segment C. The `gso_size` clamp in `skb_tc()`. Without it every split
+- Segment B. `walk_hello()` with `copy_list()`, `walk_extensions()` and
+  `read_versions()`. The bounded walk over the cipher list (capped at 64)
+  and the extensions (capped at 32), the cut at the segment's end, and the
+  truncation reason. GREASE values are skipped later, in `check_policy()`.
+- Segment C. The `gso_size` clamp in `read_headers()`. Without it every split
   ClientHello reports as complete.
+
+Code is quoted from tag `eval-2`.
 
 **Results.** The flowcharts, the code, and the output of each segment. For
 segment C, the before and after lines from PROGRESS.md (a 1557-byte record
@@ -354,20 +362,16 @@ conclusion drawn from the eight individual conclusions.
 
 ---
 
-## Schedule (revised Sat 3 Oct)
+## Schedule (final, Tue 6 Oct)
 
 | Date | Work |
 |---|---|
-| Wed 30 Sep to Thu 1 Oct | Harnesses for experiments 1, 3, 4 and 5. Tag `eval-1`. Done. |
-| Sat 3 Oct | Plan revised to eight experiments. |
-| Sun 4 Oct | New harnesses: `fuzz.sh`, `load.sh`, `enforce.sh`, `attrib.sh`. |
-| Mon 5 Oct | Campaign on EC2, about four hours. |
-| Tue 6 to Sun 11 Oct | Write chapter 4. Experiment 2 is desk work. |
+| Wed 30 Sep to Thu 1 Oct | Harnesses for experiments 1, 3, 4 and 5. Tag `eval-1`. |
+| Sat 3 Oct | Plan revised to eight experiments. Harnesses `fuzz.sh`, `load.sh`, `enforce.sh`, `attrib.sh`. First campaign on EC2, tag `eval-1.1`. |
+| Mon 5 to Tue 6 Oct | De-slop review, egress removed, refactor, code review. Second campaign, tag `eval-2`. |
+| Wed 7 to Sun 11 Oct | Write chapter 4. Experiment 2 is desk work. |
 | Mon 12 to Sun 18 Oct | Revision of the whole report. |
 | Mon 19 Oct | Submit. |
-
-If time runs short, drop the four extra arms of experiment 4 and the
-saturation step of experiment 5.
 
 ---
 

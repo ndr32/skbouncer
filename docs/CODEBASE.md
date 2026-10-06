@@ -52,14 +52,16 @@ Each `.c` in `src/user/` has a short `.h` beside it listing what it exports.
 
 1. A client in the container connects and sends its ClientHello. On the
    host end of the veth the packet is ingress, and `skb_tc()` runs.
-2. **Headers.** It checks Ethernet → IPv4 → TCP, and finds where the TCP
-   payload starts. Anything else passes untouched.
+2. **Headers.** `read_headers()` checks Ethernet → IPv4 → TCP, and finds
+   where the TCP payload starts. Anything else passes untouched.
 3. **How much of the record is here.** tc runs before the kernel cuts large
    sends into segments, so one packet here can be several segments on the
-   wire. `avail` is clamped to `skb->gso_size`, the size of one segment.
+   wire. `read_headers()` clamps `avail` to `skb->gso_size`, the size of one
+   segment.
    This is the fragmentation measurement: without the clamp no ClientHello
    would ever look split.
-4. **Is it a ClientHello?** The first 6 bytes must be `0x16` (handshake),
+4. **Is it a ClientHello?** In `is_client_hello()`, the first 6 bytes must
+   be `0x16` (handshake),
    `0x03` (TLS), and handshake type `0x01`. `not_a_hello()` then rejects
    byte patterns that only look like one, such as a handshake length too
    small to hold a ClientHello. It uses no per-connection state, so a real
@@ -68,12 +70,13 @@ Each `.c` in `src/user/` has a short `.h` beside it listing what it exports.
    event in the ringbuf. If the ringbuf is full, it bumps `dropped`; in
    enforce mode it builds the event in `scratch` instead, so enforcement
    never depends on room to report.
-6. **Parse.** `walk_hello()` reads the cipher list (up to 64 entries) and
-   the `supported_versions` extension (up to 32 extensions walked), never
-   past the bytes this segment holds. It records `trunc_reason` (did the
-   record continue in a later segment?) and the `seen` flags (was each list
-   read in full?).
-7. **Judge, enforce mode only.** If the packet's cgroup is inside the
+6. **Parse.** `fill_event()` fills the event and calls `walk_hello()`. That
+   reads the cipher list (up to 64 entries) through `copy_list()`, then
+   `walk_extensions()` looks for `supported_versions` (up to 32 extensions)
+   and `read_versions()` reads it. Nothing past the bytes this segment holds
+   is read. The walk records `trunc_reason` (did the record continue in a
+   later segment?) and the `seen` flags (was each list read in full?).
+7. **Judge, enforce mode only.** In `judge()`, if the packet's cgroup is inside the
    `--cgroup` scope, `check_policy()` gives a verdict from the rule in the
    `rules` map. A `violation`, or an `unknown` with `on_unknown: block`,
    returns `TCX_DROP`: the ClientHello never reaches the server.
@@ -93,11 +96,18 @@ Each `.c` in `src/user/` has a short `.h` beside it listing what it exports.
 
 | Function | Job |
 |---|---|
-| `skb_tc()` | Entry point: steps 2–8 above. |
+| `skb_tc()` | Entry point. Calls the steps in order, and reserves and submits the event (steps 5 and 8). |
+| `read_headers()` | Ethernet, IPv4 and TCP headers, the tuple, and the clamp to one segment (steps 2 and 3). |
+| `is_client_hello()` | The 6-byte check, `not_a_hello()`, and how many record bytes the segment holds (step 4). |
 | `not_a_hello()` | Structural checks that reject what cannot be a ClientHello. |
-| `walk_hello()` | Bounded walk over the ClientHello: ciphers, then extensions. |
-| `check_policy()` | The kernel's verdict. Must agree with `skb_policy_explain()`. |
 | `count_short()` | Counts a 1–5 byte segment that starts a record: too short to classify. |
+| `fill_event()` | The event's fields, the walk, and the truncation reason (step 6). |
+| `walk_hello()` | The ClientHello's header, session id, cipher list and compression, in order. |
+| `copy_list()` | Copies a list of two-byte entries, at most N, from inside the segment only. Used for ciphers and versions. |
+| `walk_extensions()` | Bounded walk over the extensions, looking for `supported_versions`. |
+| `read_versions()` | Reads the `supported_versions` list. |
+| `judge()` | Enforce mode: the verdict in scope, and drop or pass (step 7). |
+| `check_policy()` | The kernel's verdict. Must agree with `skb_policy_explain()`. |
 
 | Map | Type | Holds |
 |---|---|---|
