@@ -144,7 +144,7 @@ static void usage(FILE *out, const char *argv0)
 "Watches TLS ClientHellos and checks them against a policy.\n"
 "\n"
 "  -C, --container <name> watch this Docker container: its veth, ingress\n"
-"  -i, --iface <dev>     attach to the ingress of <dev> instead\n"
+"  -i, --iface <veth>    watch this veth instead\n"
 "  -c, --cgroup <path>   restrict enforcement to this cgroup v2 path\n"
 "                        (default with --container: the container's)\n"
 "  -p, --policy <file>   JSON policy file (see policy/README.md)\n"
@@ -229,6 +229,14 @@ static int parse_args(int argc, char **argv, struct options *opt)
 /* Runs after --container has filled in -i and --cgroup. */
 static int check_args(struct options *opt)
 {
+	/* A container's traffic arrives as ingress on the host end of its
+	 * veth. Any other interface carries other traffic, and the host's
+	 * own, SSH included, never crosses a veth. */
+	if (opt->ifname && !skb_enforce_is_veth(opt->ifname)) {
+		fprintf(stderr, "skbouncer: attaches only to a veth; %s is not one\n",
+			opt->ifname);
+		return -1;
+	}
 	if (!opt->enforce)
 		return 0;
 	if (!opt->cgroup_path) {
@@ -239,10 +247,8 @@ static int check_args(struct options *opt)
 		fprintf(stderr, "skbouncer: enforce mode requires a policy (-p)\n");
 		return -1;
 	}
-	/* The host's own traffic, SSH included, never crosses a veth. */
-	if (!opt->ifname || !skb_enforce_is_veth(opt->ifname)) {
-		fprintf(stderr, "skbouncer: enforce mode only attaches to a veth; "
-			"%s is not one\n", opt->ifname ? opt->ifname : "no -i given");
+	if (!opt->ifname) {
+		fprintf(stderr, "skbouncer: enforce mode needs a veth (--container or -i)\n");
 		return -1;
 	}
 	return 0;
@@ -267,7 +273,6 @@ static int resolve_container(struct options *opt)
 static int setup(const struct options *opt, struct run_state *st)
 {
 	struct skb_loader_opts lopts = {
-		.ifname    = opt->ifname,
 		.verbose   = opt->verbose,
 		.enforce   = st->enforce,
 		.on_event  = on_event,
@@ -308,10 +313,16 @@ static int setup(const struct options *opt, struct run_state *st)
 	}
 	/* The policy maps are filled before the attach. An empty map would
 	 * let every ClientHello through. */
-	if (st->enforce && (skb_enforce_load_rules(st->ldr, st->policy) ||
-			    skb_enforce_sync(st->ldr, st->policy, st->containers, st->scope))) {
-		fprintf(stderr, "skbouncer: cannot load policy into the kernel\n");
-		return -1;
+	if (st->enforce) {
+		int err = skb_enforce_load_rules(st->ldr, st->policy);
+
+		if (!err)
+			err = skb_enforce_sync(st->ldr, st->policy, st->containers, st->scope);
+		if (err) {
+			fprintf(stderr, "skbouncer: cannot load policy into the kernel: %s\n",
+				strerror(-err));
+			return -1;
+		}
 	}
 	if (opt->ifname && skb_loader_attach(st->ldr, opt->ifname, errbuf, sizeof(errbuf))) {
 		fprintf(stderr, "skbouncer: %s\n", errbuf);

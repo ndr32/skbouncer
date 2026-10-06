@@ -11,7 +11,6 @@
 struct skb_loader;
 
 struct skb_loader_opts {
-	const char *ifname;	/* NULL loads without attaching */
 	bool verbose;
 
 	/* Enforce mode. Blocks within the cgroup scope_id, at depth

@@ -92,6 +92,10 @@ bool skb_enforce_in_scope(uint64_t cgroup_id)
 	return bsearch(&cgroup_id, scope_ids, n_scope, sizeof(*scope_ids), cmp_u64);
 }
 
+/* Set once the rule map is written. A sync before that would point cgroups
+ * at empty rules, which the kernel treats as allow. */
+static bool rules_loaded;
+
 int skb_enforce_load_rules(struct skb_loader *ldr, const struct skb_policy *pol)
 {
 	struct skb_krule *r = malloc(sizeof(*r));
@@ -104,6 +108,7 @@ int skb_enforce_load_rules(struct skb_loader *ldr, const struct skb_policy *pol)
 		err = skb_loader_set_rule(ldr, slot, r);
 	}
 	free(r);
+	rules_loaded = !err;
 	return err;
 }
 
@@ -112,8 +117,10 @@ int skb_enforce_sync(struct skb_loader *ldr, const struct skb_policy *pol,
 {
 	uint64_t key, *prev = NULL, *stale;
 	size_t n_stale = 0;
-	int err;
+	int err = 0;
 
+	if (!rules_loaded)
+		return -EINVAL;
 	n_scope = 0;
 	skb_cgroup_walk(scope, SCOPE_DEPTH, add_to_scope, NULL);
 	qsort(scope_ids, n_scope, sizeof(*scope_ids), cmp_u64);

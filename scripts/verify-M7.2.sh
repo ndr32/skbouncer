@@ -20,9 +20,11 @@ cleanup() {
 }
 trap cleanup EXIT
 
-REF=${FREEZE_REF:-main}
+# The tool must be the measured one: the latest eval-* tag, or FREEZE_REF.
+REF=${FREEZE_REF:-$(git describe --tags --abbrev=0 --match 'eval-*' 2>/dev/null)}
+[[ $REF ]] || die "no eval-* tag to compare the tool with; set FREEZE_REF"
 git diff --quiet "$REF" -- src include Makefile policy ||
-	die "skbouncer differs from $REF (src, include, Makefile or policy); harness work must not change the tool"
+	die "skbouncer differs from $REF (src, include, Makefile or policy); tag the new version first"
 make -s >/dev/null || die "build failed"
 [[ -x eval/cost.sh ]] || die "eval/cost.sh missing or not executable"
 

@@ -9,8 +9,8 @@
 
 struct skb_policy;
 
-/* Room for the longest reason skb_policy_explain() writes, which can
- * include a container name. */
+/* Reasons can include a container name of any length. A longer reason is
+ * cut at this size. */
 #define SKB_REASON_MAX 256
 
 struct skb_policy *skb_policy_load(const char *path, char *errbuf, size_t errlen);
