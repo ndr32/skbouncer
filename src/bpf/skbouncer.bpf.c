@@ -111,6 +111,80 @@ static __always_inline __u16 load16(struct __sk_buff *skb, __u32 off)
 	return ((__u16)b[0] << 8) | b[1];
 }
 
+/* Copies a list of n two-byte entries at `off` into dst: at most `max` of
+ * them, and none at or past `lim`. Returns how many it copied, or -1 if the
+ * load failed. */
+static __always_inline int copy_list(struct __sk_buff *skb, __u32 off, __u32 lim,
+				     __u16 *dst, __u32 n, __u32 max)
+{
+	__u32 len = n > max ? max : n;
+
+	if (off + len * 2 > lim)
+		len = off < lim ? (lim - off) / 2 : 0;
+	if (len == 0 || len > max)
+		return 0;
+	if (bpf_skb_load_bytes(skb, off, dst, len * 2) < 0)
+		return -1;
+	return len;
+}
+
+/* The supported_versions extension body at `off`: a one-byte length, then
+ * two-byte versions. Nothing after it is extracted. The caller already has
+ * the record length. */
+static __always_inline __u8 read_versions(struct __sk_buff *skb,
+					  struct skb_event *ev, __u32 off, __u32 lim)
+{
+	__u8 len;
+	int got;
+
+	if (off + 1 > lim)
+		return SKB_TRUNC_SEGMENT;
+	if (bpf_skb_load_bytes(skb, off, &len, 1) < 0)
+		return SKB_TRUNC_PARSE;
+	got = copy_list(skb, off + 1, lim, ev->versions, len / 2, SKB_MAX_VERSIONS);
+	if (got < 0)
+		return SKB_TRUNC_PARSE;
+	ev->n_versions = got;
+	if (got < len / 2)
+		return SKB_TRUNC_SEGMENT;
+	ev->seen |= SKB_SEEN_VERSIONS;
+	return SKB_TRUNC_NONE;
+}
+
+/* Walks the extensions from `off` to `ext_end`, at most SKB_MAX_EXTS of them,
+ * looking for supported_versions. */
+static __always_inline __u8 walk_extensions(struct __sk_buff *skb,
+					    struct skb_event *ev, __u32 off,
+					    __u32 ext_end, __u32 end, __u32 lim)
+{
+	__u8 b[4];
+	int i;
+
+	for (i = 0; i < SKB_MAX_EXTS; i++) {
+		__u16 type, elen;
+
+		if (off >= ext_end) {
+			if (ext_end > end)
+				return SKB_TRUNC_SEGMENT;
+			/* No extension was supported_versions, so
+			 * legacy_version is the offer. */
+			ev->seen |= SKB_SEEN_VERSIONS;
+			return SKB_TRUNC_NONE;
+		}
+		if (off + 4 > lim)
+			return SKB_TRUNC_SEGMENT;
+		if (bpf_skb_load_bytes(skb, off, b, 4) < 0)
+			return SKB_TRUNC_PARSE;
+		type = ((__u16)b[0] << 8) | b[1];
+		elen = ((__u16)b[2] << 8) | b[3];
+		off += 4;
+		if (type == TLS_EXT_SUPPORTED_VERSIONS)
+			return read_versions(skb, ev, off, lim);
+		off += elen;
+	}
+	return SKB_TRUNC_EXT_LIMIT;
+}
+
 /* Walks the ClientHello body from `hs`, the start of the handshake header.
  * The walk reads nothing at or past hs + ev->captured_len. Bytes past that
  * point reach the peer in a later segment. It returns SKB_TRUNC_SEGMENT when
@@ -124,9 +198,9 @@ static __always_inline __u8 walk_hello(struct __sk_buff *skb,
 {
 	__u32 lim = hs + ev->captured_len;
 	__u32 end = hs + ev->record_len;
-	__u32 off, ext_end, n, len;
+	__u32 off, n;
 	__u8 b[4];
-	int i;
+	int got;
 
 	if (hs + TLS_HS_HLEN + 2 > lim)
 		return SKB_TRUNC_SEGMENT;
@@ -147,26 +221,17 @@ static __always_inline __u8 walk_hello(struct __sk_buff *skb,
 		return SKB_TRUNC_PARSE;
 	off += 1 + b[0];
 
-	/* cipher_suites. One copy of up to SKB_MAX_CIPHERS entries, cut to
-	 * the bytes this segment holds. */
+	/* cipher_suites */
 	if (off + 2 > lim)
 		return SKB_TRUNC_SEGMENT;
 	n = load16(skb, off) / 2;
 	off += 2;
-	if (n > SKB_MAX_CIPHERS) {
-		ev->ciphers_capped = 1;
-		len = SKB_MAX_CIPHERS;
-	} else {
-		len = n;
-	}
-	if (off + len * 2 > lim)
-		len = off < lim ? (lim - off) / 2 : 0;
-	if (len > 0 && len <= SKB_MAX_CIPHERS) {
-		if (bpf_skb_load_bytes(skb, off, ev->ciphers, len * 2) < 0)
-			return SKB_TRUNC_PARSE;
-		ev->n_ciphers = len;
-	}
-	if (len == n)
+	ev->ciphers_capped = n > SKB_MAX_CIPHERS;
+	got = copy_list(skb, off, lim, ev->ciphers, n, SKB_MAX_CIPHERS);
+	if (got < 0)
+		return SKB_TRUNC_PARSE;
+	ev->n_ciphers = got;
+	if (got == n)
 		ev->seen |= SKB_SEEN_CIPHERS;
 	off += n * 2;
 
@@ -184,53 +249,7 @@ static __always_inline __u8 walk_hello(struct __sk_buff *skb,
 	}
 	if (off + 2 > lim)
 		return SKB_TRUNC_SEGMENT;
-	ext_end = off + 2 + load16(skb, off);
-	off += 2;
-
-	for (i = 0; i < SKB_MAX_EXTS; i++) {
-		__u16 type, elen;
-
-		if (off >= ext_end) {
-			if (ext_end > end)
-				return SKB_TRUNC_SEGMENT;
-			/* No extension was supported_versions, so
-			 * legacy_version is the offer. */
-			ev->seen |= SKB_SEEN_VERSIONS;
-			return SKB_TRUNC_NONE;
-		}
-		if (off + 4 > lim)
-			return SKB_TRUNC_SEGMENT;
-		if (bpf_skb_load_bytes(skb, off, b, 4) < 0)
-			return SKB_TRUNC_PARSE;
-		type = ((__u16)b[0] << 8) | b[1];
-		elen = ((__u16)b[2] << 8) | b[3];
-		off += 4;
-
-		if (type == TLS_EXT_SUPPORTED_VERSIONS) {
-			if (off + 1 > lim)
-				return SKB_TRUNC_SEGMENT;
-			if (bpf_skb_load_bytes(skb, off, b, 1) < 0)
-				return SKB_TRUNC_PARSE;
-			n = b[0] / 2;
-			len = n > SKB_MAX_VERSIONS ? SKB_MAX_VERSIONS : n;
-			if (off + 1 + len * 2 > lim)
-				len = off + 1 < lim ? (lim - off - 1) / 2 : 0;
-			if (len > 0 && len <= SKB_MAX_VERSIONS) {
-				if (bpf_skb_load_bytes(skb, off + 1, ev->versions,
-						       len * 2) < 0)
-					return SKB_TRUNC_PARSE;
-				ev->n_versions = len;
-			}
-			/* Nothing after supported_versions is extracted. The
-			 * caller already has the record length. */
-			if (len < n)
-				return SKB_TRUNC_SEGMENT;
-			ev->seen |= SKB_SEEN_VERSIONS;
-			return SKB_TRUNC_NONE;
-		}
-		off += elen;
-	}
-	return SKB_TRUNC_EXT_LIMIT;
+	return walk_extensions(skb, ev, off + 2, off + 2 + load16(skb, off), end, lim);
 }
 
 /* The kernel copy of skb_policy_explain() in userspace. The two must agree. */
