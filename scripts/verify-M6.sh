@@ -117,9 +117,9 @@ refusal() {	# name must_mention args...
 		"$name" "$rc" "$mention" "$OUT/$name.err"
 }
 {
-	refusal no_cgroup    --cgroup  --mode enforce -p "$OUT/policy-1.json" -i "$VETH" --direction ingress
-	refusal root_cgroup  root      --mode enforce -p "$OUT/policy-1.json" -i "$VETH" --direction ingress --cgroup /sys/fs/cgroup
-	refusal no_policy    polic     --mode enforce --cgroup "$SCOPE" -i "$VETH" --direction ingress
+	refusal no_cgroup    --cgroup  --mode enforce -p "$OUT/policy-1.json" -i "$VETH"
+	refusal root_cgroup  root      --mode enforce -p "$OUT/policy-1.json" -i "$VETH" --cgroup /sys/fs/cgroup
+	refusal no_policy    polic     --mode enforce --cgroup "$SCOPE" -i "$VETH"
 	refusal not_a_veth   veth      --mode enforce --cgroup "$SCOPE" -p "$OUT/policy-1.json" -i lo
 } >"$OUT/refusals.jsonl"
 
@@ -127,7 +127,7 @@ refusal() {	# name must_mention args...
 attached() { local out; out=$(sudo -n bpftool net show dev "$VETH" 2>/dev/null); [[ $out == *skb_tc* ]]; }
 
 start_enforce() {	# run
-	sudo -n ./skbouncer -i "$VETH" --direction ingress --format json --mode enforce \
+	sudo -n ./skbouncer -i "$VETH" --format json --mode enforce \
 		--cgroup "$SCOPE" -p "$OUT/policy-$1.json" >"$OUT/events-$1.jsonl" 2>"$OUT/loader-$1.err" &
 	LOADER=$!
 	for _ in $(seq 1 20); do

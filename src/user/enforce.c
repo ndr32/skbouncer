@@ -92,7 +92,7 @@ bool skb_enforce_in_scope(uint64_t cgroup_id)
 	return bsearch(&cgroup_id, scope_ids, n_scope, sizeof(*scope_ids), cmp_u64);
 }
 
-static int load_rules(struct skb_loader *ldr, const struct skb_policy *pol)
+int skb_enforce_load_rules(struct skb_loader *ldr, const struct skb_policy *pol)
 {
 	struct skb_krule *r = malloc(sizeof(*r));
 	int err = 0;
@@ -110,16 +110,9 @@ static int load_rules(struct skb_loader *ldr, const struct skb_policy *pol)
 int skb_enforce_sync(struct skb_loader *ldr, const struct skb_policy *pol,
 		     struct skb_container_map *containers, const char *scope)
 {
-	static bool rules_done;
 	uint64_t key, *prev = NULL, *stale;
 	size_t n_stale = 0;
 	int err;
-
-	if (!rules_done) {
-		if ((err = load_rules(ldr, pol)))
-			return err;
-		rules_done = true;
-	}
 
 	n_scope = 0;
 	skb_cgroup_walk(scope, SCOPE_DEPTH, add_to_scope, NULL);

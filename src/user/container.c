@@ -110,7 +110,7 @@ void skb_cgroup_walk(const char *path, int max_depth,
 	if (!dir)
 		return;
 	while ((d = readdir(dir))) {
-		char sub[4096];
+		char sub[PATH_MAX];
 
 		if (d->d_type != DT_DIR || d->d_name[0] == '.')
 			continue;
@@ -160,7 +160,7 @@ static json_t *docker_json(const char *path, int *status)
 {
 	struct body b = {};
 	json_t *root = NULL;
-	char url[512];
+	char url[sizeof("http://docker") + PATH_MAX];
 	long code = 0;
 	CURL *c;
 
@@ -214,7 +214,7 @@ int skb_container_refresh(struct skb_container_map *m)
 		const char *id = json_string_value(json_object_get(c, "Id"));
 		const char *name = json_string_value(
 			json_array_get(json_object_get(c, "Names"), 0));
-		char path[512];
+		char path[PATH_MAX];
 
 		if (!id || !name || cgroup_of(id, path, sizeof(path)))
 			continue;
@@ -231,7 +231,7 @@ int skb_container_refresh(struct skb_container_map *m)
  * interfaces. Each interface's iflink is the ifindex of its host-side peer. */
 static int host_veth(int pid, char *ifname, char *errbuf, size_t errlen)
 {
-	char dir[64], path[512], buf[32];
+	char dir[64], path[PATH_MAX], buf[32];
 	struct dirent *d;
 	unsigned found = 0;
 	DIR *dh;
@@ -277,7 +277,7 @@ static int host_veth(int pid, char *ifname, char *errbuf, size_t errlen)
 int skb_container_resolve(const char *name, struct skb_container_info *out,
 			  char *errbuf, size_t errlen)
 {
-	char req[512], why[256];
+	char req[PATH_MAX], why[256];
 	const char *id;
 	json_t *root;
 	int status, pid, err = 0;

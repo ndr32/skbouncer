@@ -5,7 +5,7 @@
 # fuzz.sh is run twice with one seed (the mutants must be identical) and
 # checked against tests/check_m7_3.py's own decode of what was sent and what
 # the sink received. attrib.sh is run with 10 containers. skbouncer itself
-# must be unchanged since the eval-1 tag, and nothing may be left behind.
+# must be unchanged from main (or FREEZE_REF), and nothing may be left behind.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
@@ -21,8 +21,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
-git diff --quiet eval-1 -- src include Makefile policy ||
-	die "skbouncer changed since eval-1 (src, include, Makefile or policy); M7 measures a frozen tool"
+REF=${FREEZE_REF:-main}
+git diff --quiet "$REF" -- src include Makefile policy ||
+	die "skbouncer differs from $REF (src, include, Makefile or policy); harness work must not change the tool"
 make -s >/dev/null || die "build failed"
 for h in eval/fuzz.sh eval/attrib.sh; do
 	[[ -x $h ]] || die "$h missing or not executable"

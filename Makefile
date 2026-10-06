@@ -60,11 +60,6 @@ $(BIN): $(USER_OBJS)
 clean:
 	rm -rf $(BUILD) $(BIN)
 
-# Loads the program and shows it, then unloads. Needs root.
-verify: $(BIN)
-	@echo "run in one window:   sudo ./$(BIN)"
-	@echo "then in another:     sudo bpftool prog show name skb_tc"
-
-.PHONY: all clean verify FORCE
+.PHONY: all clean FORCE
 FORCE:
 .DELETE_ON_ERROR:

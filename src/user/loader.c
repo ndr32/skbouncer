@@ -9,7 +9,6 @@
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
 
-#include "event.h"
 #include "loader.h"
 #include "skbouncer.skel.h"
 
@@ -60,85 +59,68 @@ static int handle_event(void *ctx, void *data, size_t len)
  * attaches first and also reports what an enforce instance drops. An enforce
  * instance attaches last. */
 int skb_loader_attach(struct skb_loader *ldr, const char *ifname,
-		      enum skb_direction dir)
+		      char *errbuf, size_t errlen)
 {
 	LIBBPF_OPTS(bpf_tcx_opts, opts, .flags = ldr->enforce ? 0 : BPF_F_BEFORE);
 	int ifindex = if_nametoindex(ifname);
+	int err;
 
 	if (!ifindex) {
-		fprintf(stderr, "skbouncer: no such interface '%s'\n", ifname);
-		return -1;
+		snprintf(errbuf, errlen, "no such interface '%s'", ifname);
+		return -ENODEV;
 	}
 	ldr->link = bpf_program__attach_tcx(ldr->skel->progs.skb_tc, ifindex, &opts);
 	if (!ldr->link) {
-		fprintf(stderr, "skbouncer: cannot attach to %s %s: %s\n",
-			ifname, skb_direction_name(dir), strerror(errno));
-		return -1;
+		err = -errno;
+		snprintf(errbuf, errlen, "cannot attach to %s ingress: %s", ifname,
+			 strerror(-err));
+		return err;
 	}
 	return 0;
 }
 
-struct skb_loader *skb_loader_open(const struct skb_loader_opts *opts)
+struct skb_loader *skb_loader_open(const struct skb_loader_opts *opts,
+				   char *errbuf, size_t errlen)
 {
 	struct skb_loader *ldr;
 
-	want_verbose = opts && opts->verbose;
+	want_verbose = opts->verbose;
 	libbpf_set_print(print_fn);
 
 	ldr = calloc(1, sizeof(*ldr));
 	if (!ldr) {
-		fprintf(stderr, "skbouncer: out of memory\n");
+		snprintf(errbuf, errlen, "out of memory");
 		return NULL;
 	}
-	if (opts) {
-		ldr->on_event = opts->on_event;
-		ldr->ctx = opts->ctx;
-	}
+	ldr->on_event = opts->on_event;
+	ldr->ctx = opts->ctx;
 
 	ldr->skel = skbouncer_bpf__open();
 	if (!ldr->skel) {
-		fprintf(stderr, "skbouncer: failed to open BPF object: %s\n",
-			strerror(errno));
-		free(ldr);
-		return NULL;
+		snprintf(errbuf, errlen, "cannot open the BPF object: %s", strerror(errno));
+		goto err;
 	}
-
-	/* .rodata is writable only before load. The program needs the
-	 * direction to label its events. */
-	ldr->skel->rodata->attach_dir = opts ? (__u8)opts->direction
-					     : SKB_DIR_EGRESS;
-	/* The section names ingress. The loader picks the hook here. */
-	if (opts && opts->direction == SKB_DIR_EGRESS)
-		bpf_program__set_expected_attach_type(ldr->skel->progs.skb_tc,
-						      BPF_TCX_EGRESS);
-	if (opts && opts->enforce) {
+	if (opts->enforce) {
 		ldr->enforce = true;
 		ldr->skel->rodata->enforce = 1;
 		ldr->skel->rodata->unknown_block = opts->unknown_block;
 		ldr->skel->rodata->scope_id = opts->scope_id;
 		ldr->skel->rodata->scope_level = opts->scope_level;
 	}
-
 	if (skbouncer_bpf__load(ldr->skel)) {
-		fprintf(stderr, "skbouncer: failed to load BPF object: %s\n",
-			strerror(errno));
-		if (errno == EPERM)
-			fprintf(stderr, "skbouncer: loading BPF needs root; try sudo\n");
-		skbouncer_bpf__destroy(ldr->skel);
-		free(ldr);
-		return NULL;
+		snprintf(errbuf, errlen, "cannot load the BPF program: %s%s", strerror(errno),
+			 errno == EPERM ? " (loading BPF needs root; try sudo)" : "");
+		goto err;
 	}
-
-	ldr->rb = ring_buffer__new(bpf_map__fd(ldr->skel->maps.events),
-				   handle_event, ldr, NULL);
+	ldr->rb = ring_buffer__new(bpf_map__fd(ldr->skel->maps.events), handle_event, ldr, NULL);
 	if (!ldr->rb) {
-		fprintf(stderr, "skbouncer: cannot open ringbuf: %s\n",
-			strerror(errno));
-		skb_loader_close(ldr);
-		return NULL;
+		snprintf(errbuf, errlen, "cannot open the ring buffer: %s", strerror(errno));
+		goto err;
 	}
-
 	return ldr;
+err:
+	skb_loader_close(ldr);
+	return NULL;
 }
 
 int skb_loader_set_rule(struct skb_loader *ldr, uint32_t slot,
@@ -172,7 +154,7 @@ int skb_loader_stats(const struct skb_loader *ldr, uint64_t *out, size_t n)
 {
 	int fd;
 
-	if (!ldr || !ldr->skel || n < SKB_STAT__MAX)
+	if (n < SKB_STAT__MAX)
 		return -EINVAL;
 
 	fd = bpf_map__fd(ldr->skel->maps.stats);
@@ -187,8 +169,6 @@ int skb_loader_stats(const struct skb_loader *ldr, uint64_t *out, size_t n)
 
 int skb_loader_poll(struct skb_loader *ldr, int timeout_ms)
 {
-	if (!ldr || !ldr->rb)
-		return -EINVAL;
 	return ring_buffer__poll(ldr->rb, timeout_ms);
 }
 

@@ -107,8 +107,8 @@ Each `.c` in `src/user/` has a short `.h` beside it listing what it exports.
 | `cgroup_rule` | hash | cgroup id → rule slot, for in-scope cgroups only. |
 | `scratch` | per-CPU array | Room to build an event when the ringbuf is full. |
 
-Settings fixed at load time (`const volatile`): `attach_dir`, `enforce`,
-`unknown_block`, `scope_id`, `scope_level`.
+Settings fixed at load time (`const volatile`): `enforce`, `unknown_block`,
+`scope_id`, `scope_level`.
 
 Why it is written the way it is:
 

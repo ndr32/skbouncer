@@ -104,9 +104,9 @@ def check(out):
         if not clock_ok(line, k["issued"]):
             F(f"text {k['name']}: no wall-clock HH:MM:SS near the real time: {line.strip()[:120]!r}")
 
-    # -i <veth> without --direction sees container traffic
+    # -i <veth> sees container traffic
     if c["ingress_default"]["events"] < 1:
-        F("-i <veth> with no --direction saw no ClientHello; containers need ingress by default")
+        F("-i <veth> saw no ClientHello; container traffic is ingress on its veth")
 
     # enforce with only --container
     for k in c["enforce_cases"]:

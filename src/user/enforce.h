@@ -19,11 +19,14 @@ int skb_enforce_scope(const char *path, uint64_t *id, uint32_t *level,
  * only. */
 bool skb_enforce_is_veth(const char *ifname);
 
-/* Writes every rule on the first call. Each call then points every cgroup in
- * `scope` (the --cgroup directory and the cgroups below it) at the rule its
- * container matches, and removes all other cgroups from the kernel map.
- * Nothing out of scope is blocked, and a removed cgroup never returns.
- * Returns 0 or a negative errno. */
+/* Writes every compiled rule into the kernel's rule map. Called once, before
+ * the first sync. Returns 0 or a negative errno. */
+int skb_enforce_load_rules(struct skb_loader *ldr, const struct skb_policy *pol);
+
+/* Points every cgroup in `scope` (the --cgroup directory and the cgroups
+ * below it) at the rule its container matches, and removes all other cgroups
+ * from the kernel map. Nothing out of scope is blocked, and a removed cgroup
+ * never returns. Returns 0 or a negative errno. */
 int skb_enforce_sync(struct skb_loader *ldr, const struct skb_policy *pol,
 		     struct skb_container_map *containers, const char *scope);
 

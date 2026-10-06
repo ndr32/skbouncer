@@ -9,6 +9,10 @@
 
 struct skb_policy;
 
+/* Room for the longest reason skb_policy_explain() writes, which can
+ * include a container name. */
+#define SKB_REASON_MAX 256
+
 struct skb_policy *skb_policy_load(const char *path, char *errbuf, size_t errlen);
 
 /* `container` is the event's container name, or NULL for none. `why`

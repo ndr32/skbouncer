@@ -111,13 +111,18 @@ OUT: decryption, IPv6 (connect4 is v4-only), Kubernetes / multi-host, Encrypted 
 - M6.6 - hardening from the whole-codebase review: tcx links (no orphaned filters,
        instances coexist), structural ClientHello checks, scoped cgroup_rule, kernel
        verdict only in scope. Tagged beta2.
-- M7 - evaluation harness (parse accuracy, fragmentation coverage, runtime cost)  <- CURRENT
-       FROZEN at tag `eval-1` (2026-10-01) for the campaign. Until it ends, do not
-       change src/, include/, Makefile, policy/, eval/functional.sh, eval/collect.*,
-       eval/cost.*, eval/clients*.txt or eval/cost-policy.json. The campaign runs tag
+- M7 - evaluation harness (parse accuracy, fragmentation coverage, runtime cost)
+       Was FROZEN at tag `eval-1` (2026-10-01) for the campaign: no changes to
+       src/, include/, Makefile, policy/, eval/functional.sh, eval/collect.*,
+       eval/cost.*, eval/clients*.txt or eval/cost-policy.json. The campaign ran tag
        `eval-1.1` (same tool source as eval-1, plus fuzz/attrib/load/enforce
-       harnesses), as a detached checkout on EC2. A fix means a new tag (eval-2) and rerunning every
-       experiment it could affect. Scoring scripts, eval/PLAN.md and docs may change.
+       harnesses) on 2026-10-03; results in eval/results/.
+- M8 - refactor round toward `eval-2` (started 2026-10-05), from the review against
+       docs/c-deslop.md. Egress support removed (`--direction`, `attach_dir`, the event's
+       `direction` field; SKB_EVENT_VERSION 8). When the round ends: tag eval-2, rerun the
+       whole campaign, regenerate eval/results with eval/score.py and eval/workbook.py.
+       The M7 verifiers check the tool against `main`; on a branch run them with
+       FREEZE_REF=HEAD.  <- CURRENT
 
 Build each milestone so it loads and runs before starting the next.
 

@@ -44,10 +44,6 @@
 
 char LICENSE[] SEC("license") = "GPL";
 
-/* Set by the loader from --direction before the program loads. The program
- * has no way to ask the kernel which tcx hook it is on. */
-const volatile __u8 attach_dir = SKB_DIR_EGRESS;
-
 /* Enforce mode settings, set by the loader before the program loads. Only
  * sockets in the cgroup scope_id at depth scope_level, or below it, are
  * blocked. */
@@ -105,12 +101,88 @@ static __always_inline void bump(__u32 stat)
 		__sync_fetch_and_add(c, 1);
 }
 
+/* Every caller has checked off + 2 against the segment, which lies inside
+ * the skb, so the load cannot fail. */
 static __always_inline __u16 load16(struct __sk_buff *skb, __u32 off)
 {
 	__u8 b[2] = {};
 
 	bpf_skb_load_bytes(skb, off, b, 2);
 	return ((__u16)b[0] << 8) | b[1];
+}
+
+/* Copies a list of n two-byte entries at `off` into dst: at most `max` of
+ * them, and none at or past `lim`. Returns how many it copied, or -1 if the
+ * load failed. */
+static __always_inline int copy_list(struct __sk_buff *skb, __u32 off, __u32 lim,
+				     __u16 *dst, __u32 n, __u32 max)
+{
+	__u32 len = n > max ? max : n;
+
+	if (off + len * 2 > lim)
+		len = off < lim ? (lim - off) / 2 : 0;
+	if (len == 0 || len > max)
+		return 0;
+	if (bpf_skb_load_bytes(skb, off, dst, len * 2) < 0)
+		return -1;
+	return len;
+}
+
+/* The supported_versions extension body at `off`: a one-byte length, then
+ * two-byte versions. Nothing after it is extracted. The caller already has
+ * the record length. */
+static __always_inline __u8 read_versions(struct __sk_buff *skb,
+					  struct skb_event *ev, __u32 off, __u32 lim)
+{
+	__u8 len;
+	int got;
+
+	if (off + 1 > lim)
+		return SKB_TRUNC_SEGMENT;
+	if (bpf_skb_load_bytes(skb, off, &len, 1) < 0)
+		return SKB_TRUNC_PARSE;
+	got = copy_list(skb, off + 1, lim, ev->versions, len / 2, SKB_MAX_VERSIONS);
+	if (got < 0)
+		return SKB_TRUNC_PARSE;
+	ev->n_versions = got;
+	if (got < len / 2)
+		return SKB_TRUNC_SEGMENT;
+	ev->seen |= SKB_SEEN_VERSIONS;
+	return SKB_TRUNC_NONE;
+}
+
+/* Walks the extensions from `off` to `ext_end`, at most SKB_MAX_EXTS of them,
+ * looking for supported_versions. */
+static __always_inline __u8 walk_extensions(struct __sk_buff *skb,
+					    struct skb_event *ev, __u32 off,
+					    __u32 ext_end, __u32 end, __u32 lim)
+{
+	__u8 b[4];
+	int i;
+
+	for (i = 0; i < SKB_MAX_EXTS; i++) {
+		__u16 type, elen;
+
+		if (off >= ext_end) {
+			if (ext_end > end)
+				return SKB_TRUNC_SEGMENT;
+			/* No extension was supported_versions, so
+			 * legacy_version is the offer. */
+			ev->seen |= SKB_SEEN_VERSIONS;
+			return SKB_TRUNC_NONE;
+		}
+		if (off + 4 > lim)
+			return SKB_TRUNC_SEGMENT;
+		if (bpf_skb_load_bytes(skb, off, b, 4) < 0)
+			return SKB_TRUNC_PARSE;
+		type = ((__u16)b[0] << 8) | b[1];
+		elen = ((__u16)b[2] << 8) | b[3];
+		off += 4;
+		if (type == TLS_EXT_SUPPORTED_VERSIONS)
+			return read_versions(skb, ev, off, lim);
+		off += elen;
+	}
+	return SKB_TRUNC_EXT_LIMIT;
 }
 
 /* Walks the ClientHello body from `hs`, the start of the handshake header.
@@ -126,9 +198,9 @@ static __always_inline __u8 walk_hello(struct __sk_buff *skb,
 {
 	__u32 lim = hs + ev->captured_len;
 	__u32 end = hs + ev->record_len;
-	__u32 off, ext_end, n, len;
+	__u32 off, n;
 	__u8 b[4];
-	int i;
+	int got;
 
 	if (hs + TLS_HS_HLEN + 2 > lim)
 		return SKB_TRUNC_SEGMENT;
@@ -149,26 +221,17 @@ static __always_inline __u8 walk_hello(struct __sk_buff *skb,
 		return SKB_TRUNC_PARSE;
 	off += 1 + b[0];
 
-	/* cipher_suites. One copy of up to SKB_MAX_CIPHERS entries, cut to
-	 * the bytes this segment holds. */
+	/* cipher_suites */
 	if (off + 2 > lim)
 		return SKB_TRUNC_SEGMENT;
 	n = load16(skb, off) / 2;
 	off += 2;
-	if (n > SKB_MAX_CIPHERS) {
-		ev->ciphers_capped = 1;
-		len = SKB_MAX_CIPHERS;
-	} else {
-		len = n;
-	}
-	if (off + len * 2 > lim)
-		len = off < lim ? (lim - off) / 2 : 0;
-	if (len > 0 && len <= SKB_MAX_CIPHERS) {
-		if (bpf_skb_load_bytes(skb, off, ev->ciphers, len * 2) < 0)
-			return SKB_TRUNC_PARSE;
-		ev->n_ciphers = len;
-	}
-	if (len == n)
+	ev->ciphers_capped = n > SKB_MAX_CIPHERS;
+	got = copy_list(skb, off, lim, ev->ciphers, n, SKB_MAX_CIPHERS);
+	if (got < 0)
+		return SKB_TRUNC_PARSE;
+	ev->n_ciphers = got;
+	if (got == n)
 		ev->seen |= SKB_SEEN_CIPHERS;
 	off += n * 2;
 
@@ -186,53 +249,7 @@ static __always_inline __u8 walk_hello(struct __sk_buff *skb,
 	}
 	if (off + 2 > lim)
 		return SKB_TRUNC_SEGMENT;
-	ext_end = off + 2 + load16(skb, off);
-	off += 2;
-
-	for (i = 0; i < SKB_MAX_EXTS; i++) {
-		__u16 type, elen;
-
-		if (off >= ext_end) {
-			if (ext_end > end)
-				return SKB_TRUNC_SEGMENT;
-			/* No extension was supported_versions, so
-			 * legacy_version is the offer. */
-			ev->seen |= SKB_SEEN_VERSIONS;
-			return SKB_TRUNC_NONE;
-		}
-		if (off + 4 > lim)
-			return SKB_TRUNC_SEGMENT;
-		if (bpf_skb_load_bytes(skb, off, b, 4) < 0)
-			return SKB_TRUNC_PARSE;
-		type = ((__u16)b[0] << 8) | b[1];
-		elen = ((__u16)b[2] << 8) | b[3];
-		off += 4;
-
-		if (type == TLS_EXT_SUPPORTED_VERSIONS) {
-			if (off + 1 > lim)
-				return SKB_TRUNC_SEGMENT;
-			if (bpf_skb_load_bytes(skb, off, b, 1) < 0)
-				return SKB_TRUNC_PARSE;
-			n = b[0] / 2;
-			len = n > SKB_MAX_VERSIONS ? SKB_MAX_VERSIONS : n;
-			if (off + 1 + len * 2 > lim)
-				len = off + 1 < lim ? (lim - off - 1) / 2 : 0;
-			if (len > 0 && len <= SKB_MAX_VERSIONS) {
-				if (bpf_skb_load_bytes(skb, off + 1, ev->versions,
-						       len * 2) < 0)
-					return SKB_TRUNC_PARSE;
-				ev->n_versions = len;
-			}
-			/* Nothing after supported_versions is extracted. The
-			 * caller already has the record length. */
-			if (len < n)
-				return SKB_TRUNC_SEGMENT;
-			ev->seen |= SKB_SEEN_VERSIONS;
-			return SKB_TRUNC_NONE;
-		}
-		off += elen;
-	}
-	return SKB_TRUNC_EXT_LIMIT;
+	return walk_extensions(skb, ev, off + 2, off + 2 + load16(skb, off), end, lim);
 }
 
 /* The kernel copy of skb_policy_explain() in userspace. The two must agree. */
@@ -329,117 +346,108 @@ static __always_inline void count_short(struct __sk_buff *skb, __u32 pay_off,
 	bump(SKB_STAT_SHORT);
 }
 
-/* One program serves both tcx hooks. The parse does not depend on direction.
- *
- * The name must stay within 15 characters. BPF_OBJ_NAME_LEN is 16 including
- * the NUL, and bpftool shows a longer name truncated. */
-SEC("tcx/ingress")	/* the loader switches it to egress when asked */
-int skb_tc(struct __sk_buff *skb)
+/* What read_headers() and is_client_hello() learn about one packet. */
+struct pkt {
+	struct skb_tuple tuple;
+	__u32 pay_off;		/* where the TCP payload starts */
+	__u32 avail;		/* payload bytes in the first wire segment */
+	__u16 record_len;
+	__u16 captured_len;	/* record bytes after the header in that segment */
+};
+
+/* Ethernet, IPv4 and TCP. The headers sit in the linear area, and direct
+ * access to them is safe. The packet pointers stay inside this function,
+ * where the verifier has seen them checked against data_end. */
+static __always_inline bool read_headers(struct __sk_buff *skb, struct pkt *p)
 {
 	void *data     = (void *)(long)skb->data;
 	void *data_end = (void *)(long)skb->data_end;
 	struct ethhdr *eth = data;
 	struct iphdr *ip;
 	struct tcphdr *tcp;
-	struct skb_tuple tuple;
-	struct skb_event *ev;
-	__u32 l4_off, pay_off, avail, seg_len, body_len;
-	__u16 record_len, captured_len;
-	__u8 tls[TLS_SNIFF_LEN];
-	int reported = 1, act;
+	__u32 l4_off, seg_len;
 
-	/* The Ethernet, IP and TCP headers sit in the linear area at either
-	 * hook, and direct access to them is safe. tcp_sendmsg places the
-	 * payload in page fragments, so the TLS bytes below are read with
-	 * bpf_skb_load_bytes(). */
 	if ((void *)(eth + 1) > data_end)
-		return SKB_PASS;
+		return false;
 	if (eth->h_proto != bpf_htons(ETH_P_IP))
-		return SKB_PASS;
+		return false;
 
 	ip = data + ETH_HLEN;
 	if ((void *)(ip + 1) > data_end)
-		return SKB_PASS;
+		return false;
 	if (ip->protocol != IPPROTO_TCP)
-		return SKB_PASS;
+		return false;
 	/* Only the first fragment carries the TCP header. */
 	if (ip->frag_off & bpf_htons(IP_OFFMASK))
-		return SKB_PASS;
+		return false;
 	if (ip->ihl < 5)
-		return SKB_PASS;
+		return false;
 	l4_off = ETH_HLEN + (__u32)ip->ihl * 4;	/* <= 14 + 60 */
 
 	tcp = data + l4_off;
 	if ((void *)(tcp + 1) > data_end)
-		return SKB_PASS;
+		return false;
 	if (tcp->doff < 5)
-		return SKB_PASS;
-	pay_off = l4_off + (__u32)tcp->doff * 4;	/* <= 134 */
+		return false;
+	p->pay_off = l4_off + (__u32)tcp->doff * 4;	/* <= 134 */
+	if (p->pay_off >= skb->len)
+		return false;
 
-	if (pay_off >= skb->len)
-		return SKB_PASS;
+	p->tuple.saddr = ip->saddr;
+	p->tuple.daddr = ip->daddr;
+	p->tuple.sport = tcp->source;
+	p->tuple.dport = tcp->dest;
 
-	/* Read the tuple before any helper call so the verifier keeps the
-	 * packet pointers valid. */
-	tuple.saddr = ip->saddr;
-	tuple.daddr = ip->daddr;
-	tuple.sport = tcp->source;
-	tuple.dport = tcp->dest;
-
-	/* The bytes of the record that the first wire segment carries. Both
-	 * hooks run before segmentation, and veth forwards GSO packets
-	 * whole, so skb->len can span several wire segments. gso_size is the
-	 * payload of one segment. Without this clamp every ClientHello would
-	 * look whole. */
-	avail = skb->len - pay_off;
+	/* The bytes of the record that the first wire segment carries. The
+	 * hook runs before segmentation, and veth forwards GSO packets whole,
+	 * so skb->len can span several wire segments. gso_size is the payload
+	 * of one segment. Without this clamp every ClientHello would look
+	 * whole. */
+	p->avail = skb->len - p->pay_off;
 	seg_len = skb->gso_size;
-	if (seg_len >= TLS_SNIFF_LEN && seg_len < avail)
-		avail = seg_len;
+	if (seg_len >= TLS_SNIFF_LEN && seg_len < p->avail)
+		p->avail = seg_len;
+	return true;
+}
 
-	if (avail < TLS_SNIFF_LEN) {
-		count_short(skb, pay_off, avail);
-		return SKB_PASS;
+/* The segment is assumed to start on a record boundary. A ClientHello can
+ * appear later in a connection (STARTTLS), so any segment may start one.
+ * not_a_hello() rejects segments that only resemble one. */
+static __always_inline bool is_client_hello(struct __sk_buff *skb, struct pkt *p)
+{
+	__u8 tls[TLS_SNIFF_LEN];
+	__u32 body_len;
+
+	if (p->avail < TLS_SNIFF_LEN) {
+		count_short(skb, p->pay_off, p->avail);
+		return false;
 	}
-	if (bpf_skb_load_bytes(skb, pay_off, tls, sizeof(tls)) < 0)
-		return SKB_PASS;
-
-	/* The segment is assumed to start on a record boundary. A
-	 * ClientHello can appear later in a connection (STARTTLS), so any
-	 * segment may start one. not_a_hello() rejects segments that only
-	 * resemble one. */
+	if (bpf_skb_load_bytes(skb, p->pay_off, tls, sizeof(tls)) < 0)
+		return false;
 	if (tls[0] != TLS_CT_HANDSHAKE)
-		return SKB_PASS;
+		return false;
 	if (tls[1] != 0x03)		/* record layer version is always 3.x */
-		return SKB_PASS;
+		return false;
 	if (tls[5] != TLS_HS_CLIENT_HELLO)
-		return SKB_PASS;
+		return false;
 
-	record_len = ((__u16)tls[3] << 8) | tls[4];
-	if (record_len < TLS_HS_HLEN || record_len > TLS_RECORD_MAX)
-		return SKB_PASS;
-	if (not_a_hello(skb, pay_off, avail, record_len))
-		return SKB_PASS;
-
-	bump(SKB_STAT_DETECTED);
+	p->record_len = ((__u16)tls[3] << 8) | tls[4];
+	if (p->record_len < TLS_HS_HLEN || p->record_len > TLS_RECORD_MAX)
+		return false;
+	if (not_a_hello(skb, p->pay_off, p->avail, p->record_len))
+		return false;
 
 	/* avail >= TLS_SNIFF_LEN, so body_len is at least 1. skb->len can
 	 * exceed 64 KiB. The result is bounded by record_len, at most
 	 * TLS_RECORD_MAX, and fits a __u16. */
-	body_len = avail - TLS_RECORD_HLEN;
-	captured_len = body_len < record_len ? (__u16)body_len : record_len;
+	body_len = p->avail - TLS_RECORD_HLEN;
+	p->captured_len = body_len < p->record_len ? (__u16)body_len : p->record_len;
+	return true;
+}
 
-	ev = bpf_ringbuf_reserve(&events, sizeof(*ev), 0);
-	if (!ev) {
-		__u32 zero = 0;
-
-		bump(SKB_STAT_DROPPED);
-		if (!enforce)
-			return SKB_PASS;
-		ev = bpf_map_lookup_elem(&scratch, &zero);
-		if (!ev)
-			return SKB_PASS;
-		reported = 0;
-	}
+static __always_inline void fill_event(struct __sk_buff *skb, const struct pkt *p,
+				       struct skb_event *ev)
+{
 	/* Reserved ringbuf memory is not zeroed, and the walk may stop before
 	 * filling every field. */
 	__builtin_memset(ev, 0, sizeof(*ev));
@@ -448,35 +456,68 @@ int skb_tc(struct __sk_buff *skb)
 	 * socket. */
 	ev->cgroup_id = bpf_skb_cgroup_id(skb);
 	ev->ktime_ns = bpf_ktime_get_ns();
-	ev->tuple = tuple;
+	ev->tuple = p->tuple;
 	ev->ifindex = skb->ifindex;
-	ev->direction = attach_dir;
-	ev->record_len = record_len;
-	ev->captured_len = captured_len;
+	ev->record_len = p->record_len;
+	ev->captured_len = p->captured_len;
 	ev->event_version = SKB_EVENT_VERSION;
 
 	/* A walk that runs out of segment is SEGMENT whatever field it was
 	 * reading. These events form the fragmentation dataset. A walk that
 	 * runs out of record with the whole record in hand is PARSE. */
-	ev->trunc_reason = walk_hello(skb, ev, pay_off + TLS_RECORD_HLEN);
-	if (captured_len < record_len)
+	ev->trunc_reason = walk_hello(skb, ev, p->pay_off + TLS_RECORD_HLEN);
+	if (p->captured_len < p->record_len)
 		ev->trunc_reason = SKB_TRUNC_SEGMENT;
 	else if (ev->trunc_reason == SKB_TRUNC_SEGMENT)
 		ev->trunc_reason = SKB_TRUNC_PARSE;
+}
 
-	/* The kernel judges only in scope. cgroup_rule holds in-scope
-	 * cgroups only, and elsewhere there is no rule to judge by. */
-	if (enforce) {
-		ev->action = SKB_ACTION_PASS;
-		ev->verdict = SKB_VERDICT_NONE;
-		if (bpf_skb_ancestor_cgroup_id(skb, scope_level) == scope_id) {
-			ev->verdict = check_policy(ev);
-			if (ev->verdict == SKB_VERDICT_VIOLATION ||
-			    (ev->verdict == SKB_VERDICT_UNKNOWN && unknown_block))
-				ev->action = SKB_ACTION_BLOCK;
-		}
+/* Enforce mode. The kernel judges only in scope. cgroup_rule holds in-scope
+ * cgroups only, and elsewhere there is no rule to judge by. */
+static __always_inline int judge(struct __sk_buff *skb, struct skb_event *ev)
+{
+	ev->action = SKB_ACTION_PASS;
+	ev->verdict = SKB_VERDICT_NONE;
+	if (bpf_skb_ancestor_cgroup_id(skb, scope_level) == scope_id) {
+		ev->verdict = check_policy(ev);
+		if (ev->verdict == SKB_VERDICT_VIOLATION ||
+		    (ev->verdict == SKB_VERDICT_UNKNOWN && unknown_block))
+			ev->action = SKB_ACTION_BLOCK;
 	}
-	act = ev->action == SKB_ACTION_BLOCK ? SKB_DROP : SKB_PASS;
+	return ev->action == SKB_ACTION_BLOCK ? SKB_DROP : SKB_PASS;
+}
+
+/* Runs on tcx ingress of a container's veth, where the container's outgoing
+ * traffic arrives.
+ *
+ * The name must stay within 15 characters. BPF_OBJ_NAME_LEN is 16 including
+ * the NUL, and bpftool shows a longer name truncated. */
+SEC("tcx/ingress")
+int skb_tc(struct __sk_buff *skb)
+{
+	struct skb_event *ev;
+	struct pkt p = {};
+	int reported = 1, act;
+
+	if (!read_headers(skb, &p) || !is_client_hello(skb, &p))
+		return SKB_PASS;
+	bump(SKB_STAT_DETECTED);
+
+	ev = bpf_ringbuf_reserve(&events, sizeof(*ev), 0);
+	if (!ev) {
+		__u32 zero = 0;
+
+		bump(SKB_STAT_DROPPED);
+		if (!enforce)
+			return SKB_PASS;
+		/* Enforcement does not depend on room to report. */
+		ev = bpf_map_lookup_elem(&scratch, &zero);
+		if (!ev)
+			return SKB_PASS;
+		reported = 0;
+	}
+	fill_event(skb, &p, ev);
+	act = enforce ? judge(skb, ev) : SKB_PASS;
 
 	if (reported)
 		bpf_ringbuf_submit(ev, 0);

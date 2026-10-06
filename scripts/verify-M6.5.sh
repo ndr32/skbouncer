@@ -6,7 +6,7 @@
 #   --version works unprivileged; --help mentions --container.
 #   --container NAME finds the container's veth, watches ingress, and in
 #     enforce mode also supplies the --cgroup scope. Unknown names are refused.
-#   -i <veth> with no --direction watches ingress.
+#   -i <veth> watches ingress.
 #   JSON events gain "reason" (why the verdict) and "time" (ISO 8601 wall
 #     clock); in JSON mode stdout carries nothing but JSON lines.
 #   Text lines show HH:MM:SS, versions as 1.3/1.2 not 0304, cipher names, and

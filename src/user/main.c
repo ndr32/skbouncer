@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 #include <errno.h>
 #include <getopt.h>
+#include <limits.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -16,10 +17,8 @@
 #include "policy.h"
 #include "version.h"
 
-enum run_mode {
-	MODE_AUDIT = 0,
-	MODE_ENFORCE,
-};
+/* Room for a path and the sentence around it. */
+#define ERRBUF_LEN (PATH_MAX + 256)
 
 struct options {
 	const char *container;
@@ -27,9 +26,7 @@ struct options {
 	const char *ifname;
 	const char *cgroup_path;
 	const char *policy_path;
-	enum run_mode mode;
-	enum skb_direction direction;
-	bool direction_set;
+	bool enforce;
 	bool verbose;
 	bool json;
 };
@@ -83,7 +80,7 @@ static void on_event(void *ctx, const struct skb_event *ev)
 {
 	struct run_state *st = ctx;
 	const char *name = skb_container_lookup(st->containers, ev->cgroup_id);
-	char why[160];
+	char why[SKB_REASON_MAX];
 	enum skb_verdict v = st->policy ?
 		skb_policy_explain(st->policy, ev, name, why, sizeof(why)) : 0;
 	const char *verdict = st->policy ? skb_verdict_str(v) : NULL;
@@ -147,9 +144,7 @@ static void usage(FILE *out, const char *argv0)
 "Watches TLS ClientHellos and checks them against a policy.\n"
 "\n"
 "  -C, --container <name> watch this Docker container: its veth, ingress\n"
-"  -i, --iface <dev>     attach to <dev> instead\n"
-"  -d, --direction <d>   ingress (default on a veth) or egress (default\n"
-"                        elsewhere)\n"
+"  -i, --iface <dev>     attach to the ingress of <dev> instead\n"
 "  -c, --cgroup <path>   restrict enforcement to this cgroup v2 path\n"
 "                        (default with --container: the container's)\n"
 "  -p, --policy <file>   JSON policy file (see policy/README.md)\n"
@@ -171,12 +166,23 @@ static void usage(FILE *out, const char *argv0)
 		argv0, argv0);
 }
 
+/* `arg` must be `no` or `yes`. Sets *on to whether it is `yes`. */
+static bool either(const char *arg, const char *no, const char *yes, bool *on,
+		   const char *option)
+{
+	if (strcmp(arg, no) != 0 && strcmp(arg, yes) != 0) {
+		fprintf(stderr, "skbouncer: unknown %s '%s'\n", option, arg);
+		return false;
+	}
+	*on = strcmp(arg, yes) == 0;
+	return true;
+}
+
 static int parse_args(int argc, char **argv, struct options *opt)
 {
 	static const struct option longopts[] = {
 		{ "container", required_argument, NULL, 'C' },
 		{ "iface",     required_argument, NULL, 'i' },
-		{ "direction", required_argument, NULL, 'd' },
 		{ "cgroup",    required_argument, NULL, 'c' },
 		{ "policy",    required_argument, NULL, 'p' },
 		{ "mode",      required_argument, NULL, 'm' },
@@ -188,47 +194,22 @@ static int parse_args(int argc, char **argv, struct options *opt)
 	};
 	int c;
 
-	while ((c = getopt_long(argc, argv, "C:i:d:c:p:m:f:vVh", longopts, NULL)) != -1) {
+	while ((c = getopt_long(argc, argv, "C:i:c:p:m:f:vVh", longopts, NULL)) != -1) {
 		switch (c) {
 		case 'C': opt->container = optarg; break;
 		case 'i': opt->ifname = optarg; break;
 		case 'c': opt->cgroup_path = optarg; break;
-		case 'd':
-			opt->direction_set = true;
-			if (strcmp(optarg, "egress") == 0) {
-				opt->direction = SKB_DIR_EGRESS;
-			} else if (strcmp(optarg, "ingress") == 0) {
-				opt->direction = SKB_DIR_INGRESS;
-			} else {
-				fprintf(stderr, "skbouncer: unknown direction '%s'\n",
-					optarg);
-				return -1;
-			}
-			break;
 		case 'p': opt->policy_path = optarg; break;
 		case 'f':
-			if (strcmp(optarg, "text") == 0) {
-				opt->json = false;
-			} else if (strcmp(optarg, "json") == 0) {
-				opt->json = true;
-			} else {
-				fprintf(stderr, "skbouncer: unknown format '%s'\n",
-					optarg);
+			if (!either(optarg, "text", "json", &opt->json, "format"))
 				return -1;
-			}
 			break;
 		case 'v': opt->verbose = true; break;
 		case 'h': usage(stdout, argv[0]); exit(EXIT_SUCCESS);
 		case 'V': printf("skbouncer %s\n", SKB_VERSION); exit(EXIT_SUCCESS);
 		case 'm':
-			if (strcmp(optarg, "audit") == 0) {
-				opt->mode = MODE_AUDIT;
-			} else if (strcmp(optarg, "enforce") == 0) {
-				opt->mode = MODE_ENFORCE;
-			} else {
-				fprintf(stderr, "skbouncer: unknown mode '%s'\n", optarg);
+			if (!either(optarg, "audit", "enforce", &opt->enforce, "mode"))
 				return -1;
-			}
 			break;
 		default:
 			return -1;
@@ -248,10 +229,7 @@ static int parse_args(int argc, char **argv, struct options *opt)
 /* Runs after --container has filled in -i and --cgroup. */
 static int check_args(struct options *opt)
 {
-	if (!opt->direction_set && opt->ifname && skb_enforce_is_veth(opt->ifname))
-		opt->direction = SKB_DIR_INGRESS;
-
-	if (opt->mode != MODE_ENFORCE)
+	if (!opt->enforce)
 		return 0;
 	if (!opt->cgroup_path) {
 		fprintf(stderr, "skbouncer: enforce mode requires --cgroup\n");
@@ -272,7 +250,7 @@ static int check_args(struct options *opt)
 
 static int resolve_container(struct options *opt)
 {
-	char errbuf[512];
+	char errbuf[ERRBUF_LEN];
 
 	if (skb_container_resolve(opt->container, &opt->cinfo, errbuf, sizeof(errbuf))) {
 		fprintf(stderr, "skbouncer: %s\n", errbuf);
@@ -290,13 +268,12 @@ static int setup(const struct options *opt, struct run_state *st)
 {
 	struct skb_loader_opts lopts = {
 		.ifname    = opt->ifname,
-		.direction = opt->direction,
 		.verbose   = opt->verbose,
 		.enforce   = st->enforce,
 		.on_event  = on_event,
 		.ctx       = st,
 	};
-	char errbuf[512];
+	char errbuf[ERRBUF_LEN];
 
 	/* The policy loads first, so a bad policy file fails before anything
 	 * enters the kernel. */
@@ -325,17 +302,21 @@ static int setup(const struct options *opt, struct run_state *st)
 		fprintf(stderr, "skbouncer: cannot list containers via "
 			"/var/run/docker.sock; container names unavailable\n");
 
-	if (!(st->ldr = skb_loader_open(&lopts)))
+	if (!(st->ldr = skb_loader_open(&lopts, errbuf, sizeof(errbuf)))) {
+		fprintf(stderr, "skbouncer: %s\n", errbuf);
 		return -1;
+	}
 	/* The policy maps are filled before the attach. An empty map would
 	 * let every ClientHello through. */
-	if (st->enforce && skb_enforce_sync(st->ldr, st->policy, st->containers,
-					    st->scope)) {
+	if (st->enforce && (skb_enforce_load_rules(st->ldr, st->policy) ||
+			    skb_enforce_sync(st->ldr, st->policy, st->containers, st->scope))) {
 		fprintf(stderr, "skbouncer: cannot load policy into the kernel\n");
 		return -1;
 	}
-	if (opt->ifname && skb_loader_attach(st->ldr, opt->ifname, opt->direction))
+	if (opt->ifname && skb_loader_attach(st->ldr, opt->ifname, errbuf, sizeof(errbuf))) {
+		fprintf(stderr, "skbouncer: %s\n", errbuf);
 		return -1;
+	}
 	return 0;
 }
 
@@ -344,12 +325,11 @@ static void announce(const struct options *opt, const struct run_state *st)
 	const char *doing = st->enforce ? "enforcing on" : "watching";
 
 	if (opt->container)
-		fprintf(stderr, "skbouncer: %s container %s (%s %s); Ctrl-C to stop\n",
-			doing, opt->container, opt->ifname,
-			skb_direction_name(opt->direction));
+		fprintf(stderr, "skbouncer: %s container %s (%s ingress); Ctrl-C to stop\n",
+			doing, opt->container, opt->ifname);
 	else if (opt->ifname)
-		fprintf(stderr, "skbouncer: %s %s %s; Ctrl-C to stop\n", doing,
-			opt->ifname, skb_direction_name(opt->direction));
+		fprintf(stderr, "skbouncer: %s %s ingress; Ctrl-C to stop\n", doing,
+			opt->ifname);
 	else
 		fprintf(stderr, "skbouncer: loaded but not attached (pass --container "
 			"or -i); Ctrl-C to unload\n");
@@ -409,7 +389,7 @@ static void teardown(struct run_state *st)
 
 int main(int argc, char **argv)
 {
-	struct options opt = { .mode = MODE_AUDIT };
+	struct options opt = {};
 	struct run_state st = {};
 	int rc = EXIT_FAILURE;
 
@@ -427,7 +407,7 @@ int main(int argc, char **argv)
 		return EXIT_FAILURE;
 
 	st.json = opt.json;
-	st.enforce = opt.mode == MODE_ENFORCE;
+	st.enforce = opt.enforce;
 	if (setup(&opt, &st) == 0 && catch_signals() == 0) {
 		announce(&opt, &st);
 		rc = run(&st);

@@ -20,8 +20,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
-git diff --quiet main -- src include Makefile policy ||
-	die "skbouncer changed on this branch (src, include, Makefile or policy); M7 measures a frozen tool"
+REF=${FREEZE_REF:-main}
+git diff --quiet "$REF" -- src include Makefile policy ||
+	die "skbouncer differs from $REF (src, include, Makefile or policy); harness work must not change the tool"
 make -s >/dev/null || die "build failed"
 [[ -x eval/cost.sh ]] || die "eval/cost.sh missing or not executable"
 

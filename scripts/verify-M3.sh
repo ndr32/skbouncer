@@ -68,7 +68,7 @@ IDX=$(docker exec "$CLI" cat /sys/class/net/eth0/iflink)
 VETH=$(ip -o link | awk -v i="$IDX" -F': ' '$1+0==i {split($2,a,"@"); print a[1]}')
 [[ -n "$VETH" ]] || die "cannot find the client's veth"
 
-sudo -n ./skbouncer -i "$VETH" --direction ingress --format json \
+sudo -n ./skbouncer -i "$VETH" --format json \
 	>"$OUT/events.jsonl" 2>"$OUT/loader.err" &
 LOADER=$!
 # Capture before matching: `bpftool | grep -q` under pipefail can fail with

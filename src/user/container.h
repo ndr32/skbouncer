@@ -2,6 +2,7 @@
 #ifndef SKB_CONTAINER_H
 #define SKB_CONTAINER_H
 
+#include <limits.h>
 #include <net/if.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -27,7 +28,7 @@ int skb_container_refresh(struct skb_container_map *m);
 
 struct skb_container_info {
 	char ifname[IF_NAMESIZE];	/* host end of its veth */
-	char cgroup[512];		/* its cgroup v2 directory */
+	char cgroup[PATH_MAX];		/* its cgroup v2 directory */
 };
 
 /* Asks dockerd for a running container by name or id. On failure errbuf
