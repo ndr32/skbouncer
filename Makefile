@@ -23,7 +23,8 @@ INCLUDES := -Iinclude -Isrc/user -I$(BUILD)
 # Recorded with every result set, so it names the exact commit.
 VERSION := $(shell git describe --always --dirty 2>/dev/null || echo unknown)
 
-CFLAGS  := -g -O2 -Wall -Wextra -Wno-unused-parameter
+# -MMD -MP: each object also depends on the headers it includes.
+CFLAGS  := -g -O2 -Wall -Wextra -Wno-unused-parameter -MMD -MP
 LDLIBS  := -lbpf -lelf -lz -lcurl -ljansson
 
 # vmlinux.h emits bare forward declarations for anonymous types.
@@ -59,6 +60,8 @@ $(BIN): $(USER_OBJS)
 
 clean:
 	rm -rf $(BUILD) $(BIN)
+
+-include $(USER_OBJS:.o=.d)
 
 .PHONY: all clean FORCE
 FORCE:

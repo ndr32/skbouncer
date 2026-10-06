@@ -121,8 +121,8 @@ OUT: decryption, IPv6 (connect4 is v4-only), Kubernetes / multi-host, Encrypted 
        docs/c-deslop.md. Egress support removed (`--direction`, `attach_dir`, the event's
        `direction` field; SKB_EVENT_VERSION 8). When the round ends: tag eval-2, rerun the
        whole campaign, regenerate eval/results with eval/score.py and eval/workbook.py.
-       The M7 verifiers check the tool against `main`; on a branch run them with
-       FREEZE_REF=HEAD.  <- CURRENT
+       The M7 verifiers check the tool against the latest eval-* tag; before
+       tagging, run them with FREEZE_REF=HEAD.  <- CURRENT
 
 Build each milestone so it loads and runs before starting the next.
 

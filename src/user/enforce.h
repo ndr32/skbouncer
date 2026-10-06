@@ -26,7 +26,8 @@ int skb_enforce_load_rules(struct skb_loader *ldr, const struct skb_policy *pol)
 /* Points every cgroup in `scope` (the --cgroup directory and the cgroups
  * below it) at the rule its container matches, and removes all other cgroups
  * from the kernel map. Nothing out of scope is blocked, and a removed cgroup
- * never returns. Returns 0 or a negative errno. */
+ * never returns. Returns 0 or a negative errno, and -EINVAL before
+ * skb_enforce_load_rules() has succeeded. */
 int skb_enforce_sync(struct skb_loader *ldr, const struct skb_policy *pol,
 		     struct skb_container_map *containers, const char *scope);
 

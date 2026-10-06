@@ -62,6 +62,9 @@ Scope, for safety:
   retransmitting it until it gives up (about 15 minutes). Each retransmit is
   judged by whatever policy is loaded when it arrives, and passes if no
   skbouncer is running.
+- At most 8 offered versions are read. A ClientHello offering more is
+  `unknown` for a version rule and reports `parse`. No client measured in
+  `eval/census` offers more than 5.
 - A ClientHello is recognised from its first TCP segment. One whose first
   segment carries under 6 bytes (a client writing the record header on its
   own) is not detected. No client measured in `eval/census` does this.
