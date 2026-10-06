@@ -162,7 +162,7 @@ int skb_loader_stats(const struct skb_loader *ldr, uint64_t *out, size_t n)
 {
 	int fd;
 
-	if (!ldr || !ldr->skel || n < SKB_STAT__MAX)
+	if (n < SKB_STAT__MAX)
 		return -EINVAL;
 
 	fd = bpf_map__fd(ldr->skel->maps.stats);
@@ -177,8 +177,6 @@ int skb_loader_stats(const struct skb_loader *ldr, uint64_t *out, size_t n)
 
 int skb_loader_poll(struct skb_loader *ldr, int timeout_ms)
 {
-	if (!ldr || !ldr->rb)
-		return -EINVAL;
 	return ring_buffer__poll(ldr->rb, timeout_ms);
 }
 

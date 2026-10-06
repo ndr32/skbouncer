@@ -101,6 +101,8 @@ static __always_inline void bump(__u32 stat)
 		__sync_fetch_and_add(c, 1);
 }
 
+/* Every caller has checked off + 2 against the segment, which lies inside
+ * the skb, so the load cannot fail. */
 static __always_inline __u16 load16(struct __sk_buff *skb, __u32 off)
 {
 	__u8 b[2] = {};
