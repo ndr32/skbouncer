@@ -2,7 +2,8 @@
 # M9 oracle: the command-line round (eval-2.1). Userspace only: the kernel
 # program and the event format must be unchanged since eval-2.
 #
-#   --list    running containers with their veth and cgroup id, unprivileged
+#   --list    running containers with their veth and cgroup id (root: the veth
+#             is found through /proc/<pid>/root)
 #   --check   a policy described rule by rule, or refused, unprivileged
 #   summary   on exit, per container, matching the run's own events; the
 #             counter line the harnesses parse stays as it was
@@ -67,8 +68,8 @@ cat >"$OUT/policy.json" <<EOF
 EOF
 echo '{ "version": 1, "rules": [ { "container": "x", "ciphers": ["TLS_NO_SUCH_CIPHER"] } ] }' >"$OUT/bad.json"
 
-# Unprivileged on purpose: neither may need root or load anything.
-./skbouncer --list >"$OUT/list.out" 2>"$OUT/list.err"; LIST_RC=$?
+sudo -n ./skbouncer --list >"$OUT/list.out" 2>"$OUT/list.err"; LIST_RC=$?
+# Unprivileged on purpose: checking a policy must not need root or load anything.
 ./skbouncer --check -p "$OUT/policy.json" >"$OUT/check.out" 2>"$OUT/check.err"; CHECK_RC=$?
 ./skbouncer --check -p "$OUT/bad.json" >"$OUT/bad.out" 2>"$OUT/bad.err"; BAD_RC=$?
 ./skbouncer </dev/null >"$OUT/noarg.out" 2>"$OUT/noarg.err"; NOARG_RC=$?

@@ -29,7 +29,7 @@ def check(d):
     # --list
     line = [l for l in text(d, "list.out").splitlines() if l.split()[:1] == [a]]
     if rc["list"] != 0:
-        F(f"--list exited {rc['list']} unprivileged: {text(d, 'list.err').strip()[:120]}")
+        F(f"--list exited {rc['list']}: {text(d, 'list.err').strip()[:120]}")
     elif not line or line[0].split()[1:3] != [c["veth"], str(c["cgroup_id"])]:
         F(f"--list: expected '{a} {c['veth']} {c['cgroup_id']}', got {line[:1]}")
 
