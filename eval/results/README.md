@@ -7,10 +7,17 @@ Two campaigns, each run on EC2 (c7i.2xlarge, ap-southeast-1, kernel
 |---|---|---|---|---|
 | `eval-1.1` | 2026-10-03 | `results-eval-1.1.tar.xz` (18 MB) | `02a946ed...7a27` | `eval-1.1/` |
 | `eval-2` | 2026-10-06 | `results-eval-2.tar.xz` (17 MB) | `9edec910...8f52` | `eval-2/` |
+| `eval-2.1` | 2026-10-08 | `results-eval-2.1.tar.xz` (8 KB), experiment 1 only | `5d45f60b...103a` | `eval-2.1/` |
 
 `eval-2` is `eval-1.1` with egress removed, the de-slop review applied and the
-code review's fixes. Each scored folder holds `criteria.md` and `scores.json`
-from `eval/score.py`, and `skbouncer-<tag>.xlsx` from `eval/workbook.py`.
+code review's fixes. Each of their scored folders holds `criteria.md` and
+`scores.json` from `eval/score.py`, and `skbouncer-<tag>.xlsx` from
+`eval/workbook.py`.
+
+`eval-2.1` is `eval-2` with the menu, `--list`, `--check` and the exit
+summary. The change is userspace only, so only experiment 1 was rerun. Its
+archive holds `results-eval-2.1/` with `exp1/` and a failed first run, and
+`eval-2.1/criteria.md` scores C1 and C3 by hand from `exp1/results.json`.
 
 The EC2 instance ran 18% slower in the `eval-2` campaign: 610 handshakes per
 second with skbouncer off, against 747 in `eval-1.1`. Compare overheads within
