@@ -7,7 +7,7 @@ drops the ones the policy forbids. The userspace program loads it, names the
 container behind each ClientHello, gives the verdict and its reason, and
 prints one line per ClientHello.
 
-About 2,700 lines of C: 620 in the kernel side and its shared header, 2,100
+About 3,100 lines of C: 660 in the kernel side and its shared header, 2,400
 in userspace. Everything else in the repo is tests, evaluation or
 development tooling (see [Around the tool](#around-the-tool)).
 
@@ -37,14 +37,15 @@ container's cgroup. That cgroup id is what names the container.
 
 | File | Lines | What it does |
 |---|---:|---|
-| `include/skbouncer.h` | 141 | The event and rule formats the kernel and userspace share. Start here. |
-| `src/bpf/skbouncer.bpf.c` | 479 | The kernel program: detect, measure, parse, judge, drop. |
-| `src/user/main.c` | 464 | The CLI: options, safety checks, setup, the event loop, exit report. |
-| `src/user/loader.c` | 202 | Loads the program, attaches it, reads the ringbuf and the maps. |
-| `src/user/container.c` | 380 | Docker: cgroup id → container name, and `--container` → veth and cgroup. |
-| `src/user/policy.c` | 486 | The JSON policy: loading, the verdict and its reason, compiling rules for the kernel. |
-| `src/user/enforce.c` | 170 | Enforce mode: the cgroup scope, the veth check, keeping the kernel's maps current. |
-| `src/user/event.c` | 229 | Output: the text line and the JSON object. |
+| `include/skbouncer.h` | 138 | The event and rule formats the kernel and userspace share. Start here. |
+| `src/bpf/skbouncer.bpf.c` | 525 | The kernel program: detect, measure, parse, judge, drop. |
+| `src/user/main.c` | 559 | The CLI: options, safety checks, setup, the event loop, exit report and summary. |
+| `src/user/menu.c` | 191 | The menu shown with no arguments. Each choice reruns skbouncer with options. |
+| `src/user/loader.c` | 183 | Loads the program, attaches it, reads the ringbuf and the maps. |
+| `src/user/container.c` | 381 | Docker: cgroup id → container name, `--container` → veth and cgroup, `--list`. |
+| `src/user/policy.c` | 510 | The JSON policy: loading, the verdict and its reason, compiling rules for the kernel, `--check`. |
+| `src/user/enforce.c` | 150 | Enforce mode: the cgroup scope, the veth check, keeping the kernel's maps current. |
+| `src/user/event.c` | 221 | Output: the text line and the JSON object. |
 
 Each `.c` in `src/user/` has a short `.h` beside it listing what it exports.
 
@@ -138,7 +139,17 @@ Why it is written the way it is:
   `teardown()`. `check_args()` holds the safety rules: enforce mode needs a
   policy, a cgroup scope and a veth, and the root cgroup is refused.
   `run()` polls the ringbuf, and in enforce mode refreshes containers and
-  the kernel's maps once a second.
+  the kernel's maps once a second. `on_event()` keeps a tally per cgroup
+  id, which `summarise()` prints on exit after the counter line. With no
+  arguments `main()` hands over to the menu if stdin and stdout are a
+  terminal, and prints usage otherwise. `--list` and `--check` return
+  before `setup()`, so neither loads the program.
+- **`menu.c`.** `skb_menu_run()` prints the choices, picks a container from
+  a numbered list, and describes the policy file. Each run is skbouncer
+  itself, started with `execv("/proc/self/exe")` and the same options a
+  person would type, so the menu adds no second code path. The menu
+  ignores SIGINT while the child runs, so Ctrl-C ends the child, which
+  prints its summary, and the menu carries on.
 - **`loader.c`.** Wraps libbpf and the generated skeleton
   (`build/skbouncer.skel.h`). It writes the load-time settings, loads,
   attaches through tcx, and gives the rest of the code small functions for
@@ -150,10 +161,13 @@ Why it is written the way it is:
   `stat()`ing each one's directory. Unknown ids trigger one refresh, then
   are cached as misses. `skb_container_resolve()` turns `--container NAME`
   into the host end of its veth and its cgroup path.
+  `skb_container_list()` calls back once per running container with its
+  veth and cgroup id, for `--list` and the menu.
 - **`policy.c`.** Loads the JSON policy with jansson. `skb_policy_explain()`
   gives the verdict and the reason printed with it. `skb_policy_compile()`
-  turns a rule into the kernel's `skb_krule`. It also holds the cipher-name
-  table for output.
+  turns a rule into the kernel's `skb_krule`. `skb_policy_describe()`
+  prints a policy rule by rule for `--check` and the menu. It also holds
+  the cipher-name table for output.
 - **`enforce.c`.** Works out the scope (the `--cgroup` directory's id and
   depth), checks the interface is a veth, and on each sync points every
   in-scope cgroup at its rule and removes the rest.
@@ -180,7 +194,7 @@ Semantics and limits are in `policy/README.md`.
 |---|---|
 | `docs/c-deslop.md` | Review rules for keeping the C and eBPF code plain: what counts as slop here, and what only looks like it. |
 | `policy/README.md` | The policy format, verdict rules, enforcement scope, limits. |
-| `scripts/verify-M*.sh`, `tests/check_*.py` | One verifier per milestone. Each sets up containers, runs skbouncer, and checks the result against an independent source (the TLS server's own log, `bpftool`). `verify-M6.6.sh` reruns the chain from M3. |
+| `scripts/verify-M*.sh`, `tests/check_*.py` | One verifier per milestone. Each sets up containers, runs skbouncer, and checks the result against an independent source (the TLS server's own log, `bpftool`). `verify-M6.6.sh` reruns the chain from M3; `verify-M9.sh` adds the command line and drives the menu through a terminal (`tests/m9_menu.py`). |
 | `tests/tls/Dockerfile` | The pinned OpenSSL 3.5.8 test image. |
 | `eval/census/` | ClientHello sizes and split points across 24 real clients, measured from the server's side. |
 | `eval/functional.sh` | Experiment 1: the verifier chain as the 14-row functional table, plus the control run and non-TLS traffic. |
