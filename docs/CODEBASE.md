@@ -1,46 +1,32 @@
 # How the code fits together
 
 skbouncer is one eBPF program in the kernel and one C program in userspace.
-The kernel program sees every packet a container sends, finds TLS
-ClientHellos, reads their cipher suites and versions, and in enforce mode
-drops the ones the policy forbids. The userspace program loads it, names the
-container behind each ClientHello, gives the verdict and its reason, and
-prints one line per ClientHello.
+The kernel program reads the cipher suites and versions of each TLS
+ClientHello a container sends. In enforce mode it also drops the ClientHellos
+the policy forbids. The userspace program loads the kernel program, names the
+container behind each ClientHello and prints one line per ClientHello with
+its verdict and the reason.
 
-About 3,100 lines of C: 660 in the kernel side and its shared header, 2,400
-in userspace. Everything else in the repo is tests, evaluation or
-development tooling (see [Around the tool](#around-the-tool)).
+The tool is about 3,100 lines of C: 660 on the kernel side with its shared
+header, 2,400 in userspace. The rest of the repo is test and evaluation
+tooling ([Around the tool](#around-the-tool)).
 
-## At a glance
-
-```
- container                     host
- ─────────                     ────────────────────────────────────────────────────────
- client ──► eth0 ═══ veth ═══► [tcx ingress: skb_tc]  ──► bridge ──► server / internet
-                                 │  parse the ClientHello
-                                 │  judge it (enforce mode) ──► drop if it breaks policy
-                                 ▼
-                           ringbuf "events"
-                                 │
-                                 ▼
-                          skbouncer (userspace)
-                           name the container (dockerd), verdict + reason, print
-```
+## Architecture
 
 A container's outgoing traffic arrives on the host end of its veth, so the
 program attaches there, on the ingress hook. At that point the source
 address is still the container's own (before NAT), and the packet still
 belongs to the sending socket, so `bpf_skb_cgroup_id()` returns the
-container's cgroup. That cgroup id is what names the container.
+container's cgroup. skbouncer names the container from that cgroup id.
 
-## Architecture
-
-The data path runs down the left: a ClientHello through the kernel program,
-the ringbuf and `on_event()` to a text line or a JSON object. The control path
-runs up the right: `policy.c` compiles the rules, `container.c` maps cgroups to
-containers, and `enforce.c` writes both into the kernel's maps once a second.
-The kernel decides a verdict in enforce mode, to drop; userspace decides one in
-every mode, to report, and `on_event()` warns if the two differ.
+In the diagram below the data path runs down the left. A ClientHello passes
+through the kernel program and the ringbuf to `on_event()`, which prints it
+as a text line or a JSON object. The control path runs up the right.
+`policy.c` compiles the rules and `container.c` maps cgroups to containers;
+`enforce.c` writes both into the kernel's maps once a second. In enforce mode
+the kernel reaches a verdict to decide the packet. Userspace reaches its own
+verdict in every mode for the report, and `on_event()` warns if the two
+differ.
 
 ```
    the operator
@@ -130,12 +116,11 @@ Each `.c` in `src/user/` has a short `.h` beside it listing what it exports.
 3. **How much of the record is here.** tc runs before the kernel cuts large
    sends into segments, so one packet here can be several segments on the
    wire. `read_headers()` clamps `avail` to `skb->gso_size`, the size of one
-   segment.
-   This is the fragmentation measurement: without the clamp no ClientHello
-   would ever look split.
+   segment. Without the clamp no ClientHello would ever look split, and the
+   fragmentation measurement would read zero.
 4. **Is it a ClientHello?** In `is_client_hello()`, the first 6 bytes must
-   be `0x16` (handshake),
-   `0x03` (TLS), and handshake type `0x01`. `not_a_hello()` then rejects
+   hold record type `0x16` (handshake), version major `0x03` and handshake
+   type `0x01`. `not_a_hello()` then rejects
    byte patterns that only look like one, such as a handshake length too
    small to hold a ClientHello. It uses no per-connection state, so a real
    ClientHello after plaintext (STARTTLS) is still caught.
@@ -149,10 +134,11 @@ Each `.c` in `src/user/` has a short `.h` beside it listing what it exports.
    and `read_versions()` reads it. Nothing past the bytes this segment holds
    is read. The walk records `trunc_reason` (did the record continue in a
    later segment?) and the `seen` flags (was each list read in full?).
-7. **Judge, enforce mode only.** In `judge()`, if the packet's cgroup is inside the
-   `--cgroup` scope, `check_policy()` gives a verdict from the rule in the
-   `rules` map. A `violation`, or an `unknown` with `on_unknown: block`,
-   returns `TCX_DROP`: the ClientHello never reaches the server.
+7. **Judge, enforce mode only.** In `judge()`, if the packet's cgroup is
+   inside the `--cgroup` scope, `check_policy()` gives a verdict from the
+   rule in the `rules` map. A `violation`, or an `unknown` with
+   `on_unknown: block`, returns `TCX_DROP`, and the ClientHello never
+   reaches the server.
 8. **Submit.** The event goes to userspace. The program returns `TCX_NEXT`,
    which lets other programs on the same hook run too.
 9. **Userspace.** `skb_loader_poll()` hands each event to `on_event()` in
@@ -160,8 +146,9 @@ Each `.c` in `src/user/` has a short `.h` beside it listing what it exports.
    - names the container from its cgroup id (`skb_container_lookup()`);
    - gets the verdict and a one-line reason (`skb_policy_explain()`);
    - prints a text line or a JSON object (`event.c`).
-10. **Exit.** On Ctrl-C it drains the ringbuf and prints the counters:
-    detected, delivered, dropped, too short. If they don't add up, it says so.
+10. **Exit.** On Ctrl-C it drains the ringbuf and prints the counters
+    (detected, delivered, dropped, too short), with a warning if detected
+    is not delivered plus dropped. One summary line per container follows.
 
 ## The kernel side
 
@@ -173,7 +160,7 @@ Each `.c` in `src/user/` has a short `.h` beside it listing what it exports.
 | `read_headers()` | Ethernet, IPv4 and TCP headers, the tuple, and the clamp to one segment (steps 2 and 3). |
 | `is_client_hello()` | The 6-byte check, `not_a_hello()`, and how many record bytes the segment holds (step 4). |
 | `not_a_hello()` | Structural checks that reject what cannot be a ClientHello. |
-| `count_short()` | Counts a 1–5 byte segment that starts a record: too short to classify. |
+| `count_short()` | Counts a segment of 1 to 5 bytes that starts a record, too short to classify. |
 | `fill_event()` | The event's fields, the walk, and the truncation reason (step 6). |
 | `walk_hello()` | The ClientHello's header, session id, cipher list and compression, in order. |
 | `copy_list()` | Copies a list of two-byte entries, at most N, from inside the segment only. Used for ciphers and versions. |
@@ -193,7 +180,7 @@ Each `.c` in `src/user/` has a short `.h` beside it listing what it exports.
 Settings fixed at load time (`const volatile`): `enforce`, `unknown_block`,
 `scope_id`, `scope_level`.
 
-Why it is written the way it is:
+### Constraints on the kernel code
 
 - **Bounded everything.** The kernel's verifier rejects any loop it cannot
   prove ends and any read it cannot prove is in bounds. Hence the caps (64
@@ -201,8 +188,8 @@ Why it is written the way it is:
   payload.
 - **Judged in the kernel.** In enforce mode the verdict has to be reached
   before the packet leaves, so it cannot wait for userspace.
-- **tcx links.** The attachment belongs to the process: if skbouncer exits
-  or crashes, the kernel removes the program, and nothing is left blocking.
+- **tcx links.** The attachment belongs to the process. If skbouncer exits
+  or crashes, the kernel removes the program and nothing is left blocking.
 
 ## The userspace side
 
@@ -224,9 +211,9 @@ Why it is written the way it is:
   prints its summary, and the menu carries on.
 - **`loader.c`.** Wraps libbpf and the generated skeleton
   (`build/skbouncer.skel.h`). It writes the load-time settings, loads,
-  attaches through tcx, and gives the rest of the code small functions for
-  the maps. An audit instance attaches first on the hook and an enforce
-  instance last, so an auditor also reports what an enforcer drops.
+  attaches through tcx, and exposes one function per map operation. An
+  audit instance attaches first on the hook and an enforce instance last,
+  so an auditor also reports what an enforcer drops.
 - **`container.c`.** Talks to dockerd over `/var/run/docker.sock` with
   libcurl (no Docker CLI). A container's cgroup id is the inode number of its
   cgroup directory, so the name map is built by listing containers and
@@ -243,7 +230,7 @@ Why it is written the way it is:
 - **`enforce.c`.** Works out the scope (the `--cgroup` directory's id and
   depth), checks the interface is a veth, and on each sync points every
   in-scope cgroup at its rule and removes the rest.
-- **`event.c`.** The text columns, and the JSON object, written by jansson.
+- **`event.c`.** The text columns, and the JSON object written by jansson.
   The JSON is the raw event plus container, verdict and reason; the
   evaluation reads it.
 
@@ -251,13 +238,14 @@ Why it is written the way it is:
 
 | | Audit | Enforce |
 |---|---|---|
-| Verdict shown to the user | userspace | userspace |
+| Verdict shown to the operator | userspace | userspace |
 | Verdict that decides the packet | none | kernel (`check_policy()`) |
 | On a violation | reported | ClientHello dropped, and reported |
 | Scope | every ClientHello on the veth | judged only inside `--cgroup`; others pass |
 
-Both sides implement the same rule, once for userspace and once for
-the kernel. In scope, `on_event()` compares the two and warns if they differ.
+The verdict rule is written twice, in `skb_policy_explain()` and in
+`check_policy()`. In scope, `on_event()` compares the two verdicts and warns
+if they differ.
 Semantics and limits are in `policy/README.md`.
 
 ## Around the tool
