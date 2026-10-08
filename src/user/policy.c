@@ -456,6 +456,36 @@ void skb_policy_compile(const struct skb_policy *pol, unsigned slot,
 		out->ciphers[r->ciphers[i] / 64] |= 1ULL << (r->ciphers[i] % 64);
 }
 
+void skb_policy_describe(const struct skb_policy *pol, FILE *out)
+{
+	char vb[8];
+
+	for (size_t i = 0; i < pol->n_rules; i++) {
+		const struct skb_rule *r = &pol->rules[i];
+
+		fprintf(out, "rule %zu: %s: ", i + 1, r->container);
+		if (r->min_version)
+			fprintf(out, "TLS %s or later", skb_version_name(r->min_version, vb));
+		else
+			fputs("any version", out);
+		fputs("; ciphers: ", out);
+		if (r->any_cipher)
+			fputs("any cipher", out);
+		for (size_t j = 0; j < r->n_ciphers; j++) {
+			const char *name = skb_cipher_name(r->ciphers[j]);
+
+			fputs(j ? ", " : "", out);
+			if (name)
+				fputs(name, out);
+			else
+				fprintf(out, "0x%04x", r->ciphers[j]);
+		}
+		fputc('\n', out);
+	}
+	fprintf(out, "no rule matches: %s\n", pol->default_allow ? "allow" : "deny");
+	fprintf(out, "unknown verdicts: %s\n", pol->unknown_block ? "block" : "allow");
+}
+
 const char *skb_verdict_str(enum skb_verdict v)
 {
 	switch (v) {

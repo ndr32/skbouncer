@@ -50,7 +50,7 @@ $(BUILD)/version.h: FORCE | $(BUILD)
 	@v='#define SKB_VERSION "$(VERSION)"'; \
 	[ "$$(cat $@ 2>/dev/null)" = "$$v" ] || echo "$$v" >$@
 
-$(BUILD)/main.o: $(BUILD)/version.h
+$(BUILD)/main.o $(BUILD)/menu.o: $(BUILD)/version.h
 
 $(BUILD)/%.o: src/user/%.c $(SKEL) | $(BUILD)
 	$(CLANG) $(CFLAGS) $(INCLUDES) -c $< -o $@

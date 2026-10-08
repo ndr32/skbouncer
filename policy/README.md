@@ -24,6 +24,9 @@
 - `ciphers`: IANA names or hex (`"0xc02f"`). Omitted: any. An unknown
   name is a load error, so a typo cannot silently allow nothing.
 
+`./skbouncer --check -p FILE` loads a policy without root and prints each
+rule as skbouncer reads it, or the load error.
+
 ## Verdicts
 
 A ClientHello complies with a rule when **every** cipher it offers is in

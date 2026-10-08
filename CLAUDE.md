@@ -123,7 +123,12 @@ OUT: decryption, IPv6 (connect4 is v4-only), Kubernetes / multi-host, Encrypted 
        whole campaign, regenerate eval/results with eval/score.py and eval/workbook.py.
        The M7 verifiers check the tool against the latest eval-* tag; before
        tagging, run them with FREEZE_REF=HEAD. Tagged eval-2 and measured on
-       2026-10-06; results in eval/results/eval-2/. All scored criteria met.  <- CURRENT
+       2026-10-06; results in eval/results/eval-2/. All scored criteria met.
+- M9 - command line round toward `eval-2.1` (started 2026-10-07), userspace only: the
+       kernel program and event format stay as at eval-2 (verify-M9.sh checks). A menu
+       with no arguments in a terminal, `--list`, `--check`, a per-container summary
+       on exit. Before tagging: M7 verifiers with FREEZE_REF=HEAD, then rerun
+       experiment 1 on EC2.  <- CURRENT
 
 Build each milestone so it loads and runs before starting the next.
 

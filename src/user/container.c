@@ -318,6 +318,38 @@ int skb_container_resolve(const char *name, struct skb_container_info *out,
 	return err;
 }
 
+int skb_container_list(void (*fn)(const char *name, const char *veth,
+				  uint64_t cgroup_id, void *ctx), void *ctx)
+{
+	json_t *root, *c;
+	int status;
+	size_t i;
+
+	root = docker_json("/containers/json", &status);
+	if (!json_is_array(root)) {
+		json_decref(root);
+		return status ? -EPROTO : -EIO;
+	}
+	json_array_foreach(root, i, c) {
+		const char *name = json_string_value(json_array_get(json_object_get(c, "Names"), 0));
+		struct skb_container_info info;
+		char why[256];
+		struct stat st;
+
+		if (!name)
+			continue;
+		if (name[0] == '/')
+			name++;
+		if (skb_container_resolve(name, &info, why, sizeof(why)) == 0 &&
+		    stat(info.cgroup, &st) == 0)
+			fn(name, info.ifname, st.st_ino, ctx);
+		else
+			fn(name, NULL, 0, ctx);
+	}
+	json_decref(root);
+	return 0;
+}
+
 const char *skb_container_lookup(struct skb_container_map *m, uint64_t cgroup_id)
 {
 	struct entry *e;
