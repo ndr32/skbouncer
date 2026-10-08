@@ -36,6 +36,13 @@ struct skb_container_info {
 int skb_container_resolve(const char *name, struct skb_container_info *out,
 			  char *errbuf, size_t errlen);
 
+/* Calls fn for each running container: its name, the host end of its veth
+ * and its cgroup id, or NULL and 0 where those cannot be found (a host
+ * network container, say). Needs root to read the veth. Returns 0 or a
+ * negative errno. */
+int skb_container_list(void (*fn)(const char *name, const char *veth,
+				  uint64_t cgroup_id, void *ctx), void *ctx);
+
 void skb_container_map_free(struct skb_container_map *m);
 
 #endif /* SKB_CONTAINER_H */

@@ -95,7 +95,9 @@ read_until(r"Container: ")
 send((num.group(1) if num else "1") + "\n")
 read_until(r"Policy file: ")
 send(policy + "\n")
-seen = read_until(r"Ctrl-C to stop", timeout=20)
+# skbouncer's own start line, printed once attached; the menu's
+# "(Ctrl-C ends the run ...)" line comes before the program attaches.
+seen = read_until(r"container \S+ \(\S+ ingress\); Ctrl-C to stop", timeout=20)
 steps["running_line"] = bool(seen and re.search(r"Running: \S*skbouncer .*--container " + re.escape(cont), seen))
 steps["audit_attached"] = attached()
 steps["violating_ok"] = handshake("")

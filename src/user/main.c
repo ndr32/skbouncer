@@ -9,16 +9,24 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 
 #include "container.h"
 #include "enforce.h"
 #include "event.h"
 #include "loader.h"
+#include "menu.h"
 #include "policy.h"
 #include "version.h"
 
 /* Room for a path and the sentence around it. */
 #define ERRBUF_LEN (PATH_MAX + 256)
+
+/* Containers the exit summary keeps apart. */
+#define SUMMARY_MAX 256
+
+/* Long-only options. */
+enum { OPT_LIST = 256, OPT_CHECK };
 
 struct options {
 	const char *container;
@@ -29,6 +37,8 @@ struct options {
 	bool enforce;
 	bool verbose;
 	bool json;
+	bool list;
+	bool check;
 };
 
 static volatile sig_atomic_t exiting;
@@ -49,8 +59,18 @@ static int catch_signal(int sig)
 	return sigaction(sig, &sa, NULL);
 }
 
+/* One container's events, for the summary on exit. */
+struct tally {
+	uint64_t cgroup_id;
+	unsigned long n;
+	unsigned long verdicts[SKB_VERDICT_NONE];	/* by enum skb_verdict */
+	unsigned long blocked;
+};
+
 struct run_state {
 	unsigned long events;
+	struct tally tally[SUMMARY_MAX];
+	size_t n_tally;
 	bool json;
 	bool enforce;
 	struct skb_loader *ldr;
@@ -76,6 +96,17 @@ static void sync_policy(struct run_state *st)
 			strerror(-err));
 }
 
+static struct tally *tally_for(struct run_state *st, uint64_t cgroup_id)
+{
+	for (size_t i = 0; i < st->n_tally; i++)
+		if (st->tally[i].cgroup_id == cgroup_id)
+			return &st->tally[i];
+	if (st->n_tally == SUMMARY_MAX)
+		return NULL;
+	st->tally[st->n_tally].cgroup_id = cgroup_id;
+	return &st->tally[st->n_tally++];
+}
+
 static void on_event(void *ctx, const struct skb_event *ev)
 {
 	struct run_state *st = ctx;
@@ -85,6 +116,14 @@ static void on_event(void *ctx, const struct skb_event *ev)
 		skb_policy_explain(st->policy, ev, name, why, sizeof(why)) : 0;
 	const char *verdict = st->policy ? skb_verdict_str(v) : NULL;
 	const char *reason = st->policy ? why : NULL;
+	struct tally *t = tally_for(st, ev->cgroup_id);
+
+	if (t) {
+		t->n++;
+		if (st->policy)
+			t->verdicts[v]++;
+		t->blocked += ev->action == SKB_ACTION_BLOCK;
+	}
 
 	/* A cgroup created since the last sync reached the kernel without
 	 * its rule. Out of scope the kernel does not judge. */
@@ -107,6 +146,32 @@ static void on_event(void *ctx, const struct skb_event *ev)
 /* Prints the counters. Detected, delivered and dropped together give the
  * coverage denominator, and a ClientHello lost to a full ringbuf still
  * counts as detected. */
+/* One line per container, after the counters. Blocked counts every
+ * retransmit of a dropped ClientHello. */
+static void summarise(struct run_state *st)
+{
+	if (!st->n_tally)
+		return;
+	fprintf(stderr, "skbouncer: summary\n");
+	for (size_t i = 0; i < st->n_tally; i++) {
+		const struct tally *t = &st->tally[i];
+		const char *name = skb_container_lookup(st->containers, t->cgroup_id);
+		char cg[32];
+
+		if (!name) {
+			snprintf(cg, sizeof(cg), "cgroup %llu", (unsigned long long)t->cgroup_id);
+			name = cg;
+		}
+		if (st->policy)
+			fprintf(stderr, "  %s: %lu ClientHellos, %lu allow, %lu violation, "
+				"%lu unknown, %lu blocked\n", name, t->n,
+				t->verdicts[SKB_VERDICT_ALLOW], t->verdicts[SKB_VERDICT_VIOLATION],
+				t->verdicts[SKB_VERDICT_UNKNOWN], t->blocked);
+		else
+			fprintf(stderr, "  %s: %lu ClientHellos\n", name, t->n);
+	}
+}
+
 static void report(const struct skb_loader *ldr, const struct run_state *st)
 {
 	uint64_t stat[SKB_STAT__MAX];
@@ -139,7 +204,9 @@ static void usage(FILE *out, const char *argv0)
 {
 	fprintf(out,
 "usage: %s --container <name> [options]\n"
-"       %s -i <dev> [options]\n"
+"       %s -i <veth> [options]\n"
+"       %s --list\n"
+"       %s --check -p <file>\n"
 "\n"
 "Watches TLS ClientHellos and checks them against a policy.\n"
 "\n"
@@ -152,7 +219,11 @@ static void usage(FILE *out, const char *argv0)
 "  -f, --format <fmt>    text (default) or json, one object per line\n"
 "  -v, --verbose         pass libbpf debug output through\n"
 "  -V, --version         print the version\n"
+"      --list            list running containers with their veth and cgroup id\n"
+"      --check           describe the policy given with -p, and exit\n"
 "  -h, --help            this text\n"
+"\n"
+"With no arguments in a terminal, skbouncer shows a menu.\n"
 "\n"
 "Output goes to stdout; status and errors go to stderr.\n"
 "\n"
@@ -163,7 +234,7 @@ static void usage(FILE *out, const char *argv0)
 "A bridged container's outbound traffic is INGRESS on the host side of its\n"
 "veth, and is still pre-NAT there; --container attaches there for you.\n"
 "The physical interface sees it forwarded and SNATed, with no cgroup id.\n",
-		argv0, argv0);
+		argv0, argv0, argv0, argv0);
 }
 
 /* `arg` must be `no` or `yes`. Sets *on to whether it is `yes`. */
@@ -190,6 +261,8 @@ static int parse_args(int argc, char **argv, struct options *opt)
 		{ "verbose",   no_argument,       NULL, 'v' },
 		{ "version",   no_argument,       NULL, 'V' },
 		{ "help",      no_argument,       NULL, 'h' },
+		{ "list",      no_argument,       NULL, OPT_LIST },
+		{ "check",     no_argument,       NULL, OPT_CHECK },
 		{ 0, 0, 0, 0 }
 	};
 	int c;
@@ -205,6 +278,8 @@ static int parse_args(int argc, char **argv, struct options *opt)
 				return -1;
 			break;
 		case 'v': opt->verbose = true; break;
+		case OPT_LIST: opt->list = true; break;
+		case OPT_CHECK: opt->check = true; break;
 		case 'h': usage(stdout, argv[0]); exit(EXIT_SUCCESS);
 		case 'V': printf("skbouncer %s\n", SKB_VERSION); exit(EXIT_SUCCESS);
 		case 'm':
@@ -388,6 +463,7 @@ static int run(struct run_state *st)
 	 * the kernel counters. */
 	skb_loader_poll(st->ldr, 0);
 	report(st->ldr, st);
+	summarise(st);
 	return EXIT_SUCCESS;
 }
 
@@ -396,6 +472,48 @@ static void teardown(struct run_state *st)
 	skb_loader_close(st->ldr);
 	skb_container_map_free(st->containers);
 	skb_policy_free(st->policy);
+}
+
+static void print_container(const char *name, const char *veth, uint64_t cgroup_id,
+			    void *ctx)
+{
+	if (veth)
+		printf("%-24s %-16s %llu\n", name, veth, (unsigned long long)cgroup_id);
+	else
+		printf("%-24s %-16s -\n", name, "-");
+}
+
+static int list_containers(void)
+{
+	int err;
+
+	printf("%-24s %-16s %s\n", "CONTAINER", "VETH", "CGROUP ID");
+	err = skb_container_list(print_container, NULL);
+	if (err)
+		fprintf(stderr, "skbouncer: cannot list containers via dockerd: %s\n",
+			strerror(-err));
+	return err ? EXIT_FAILURE : EXIT_SUCCESS;
+}
+
+/* Loads the policy and describes it. Nothing touches the kernel, so it
+ * needs no root. */
+static int check_policy_file(const struct options *opt)
+{
+	char errbuf[ERRBUF_LEN];
+	struct skb_policy *pol;
+
+	if (!opt->policy_path) {
+		fprintf(stderr, "skbouncer: --check needs a policy (-p)\n");
+		return EXIT_FAILURE;
+	}
+	pol = skb_policy_load(opt->policy_path, errbuf, sizeof(errbuf));
+	if (!pol) {
+		fprintf(stderr, "skbouncer: %s\n", errbuf);
+		return EXIT_FAILURE;
+	}
+	skb_policy_describe(pol, stdout);
+	skb_policy_free(pol);
+	return EXIT_SUCCESS;
 }
 
 int main(int argc, char **argv)
@@ -408,10 +526,22 @@ int main(int argc, char **argv)
 	 * then wait unflushed while the poll loop blocks. */
 	setvbuf(stdout, NULL, _IOLBF, 0);
 
+	/* No arguments: the menu for a person at a terminal, usage for a
+	 * script, which must never wait on a prompt. */
+	if (argc == 1) {
+		if (isatty(STDIN_FILENO) && isatty(STDOUT_FILENO))
+			return skb_menu_run();
+		usage(stderr, argv[0]);
+		return EXIT_FAILURE;
+	}
 	if (parse_args(argc, argv, &opt) != 0) {
 		fprintf(stderr, "run '%s --help' for usage\n", argv[0]);
 		return EXIT_FAILURE;
 	}
+	if (opt.list)
+		return list_containers();
+	if (opt.check)
+		return check_policy_file(&opt);
 	if (opt.container && resolve_container(&opt) != 0)
 		return EXIT_FAILURE;
 	if (check_args(&opt) != 0)
