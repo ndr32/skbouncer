@@ -33,6 +33,78 @@ address is still the container's own (before NAT), and the packet still
 belongs to the sending socket, so `bpf_skb_cgroup_id()` returns the
 container's cgroup. That cgroup id is what names the container.
 
+## Architecture
+
+The data path runs down the left: a ClientHello through the kernel program,
+the ringbuf and `on_event()` to a text line or a JSON object. The control path
+runs up the right: `policy.c` compiles the rules, `container.c` maps cgroups to
+containers, and `enforce.c` writes both into the kernel's maps once a second.
+The kernel decides a verdict in enforce mode, to drop; userspace decides one in
+every mode, to report, and `on_event()` warns if the two differ.
+
+```
+   the operator
+        │ sudo ./skbouncer --container web -p policy.json [--mode enforce]
+        │ (no arguments in a terminal: menu.c asks, then reruns skbouncer
+        │  with the options a person would type)
+   ┌────▼─────────┐
+   │ main.c       │  options; safety checks: enforce needs a policy, a veth
+   │              │  and a container's cgroup, and refuses the root cgroup
+   └────┬─────────┘
+   ┌────▼─────────┐
+   │ loader.c     │  libbpf skeleton: load skb_tc, attach it through tcx
+   └────┬─────────┘  to the host end of the container's veth, ingress
+        │
+        │ attaches skb_tc          a client in the container
+        │                                │ ClientHello, ingress
+ ═══════╪═══════════════════ kernel side ╪══════════════════════════════════
+   ┌────▼─────────────────┐              │
+   │ read_headers()       │◄─────────────┘  one skb at a time; Ethernet,
+   │                      │  IPv4, TCP; clamp to gso_size, one segment
+   └────┬─────────────────┘
+   ┌────▼─────────────────┐
+   │ is_client_hello()    │  record 0x16, handshake 0x01, structural
+   │ not_a_hello()        │  checks; anything else passes untouched
+   └────┬─────────────────┘
+   ┌────▼─────────────────┐
+   │ fill_event()         │  cgroup id, addresses, length; up to 64
+   │ walk_hello()         │  cipher suites, supported_versions (0x002b),
+   │                      │  flags for what the first segment lacked
+   └────┬─────────────────┘
+        │ enforce mode only                  ┌──────────────────┐
+   ┌────▼─────────────────┐       reads      │ maps             │
+   │ judge()              │◄─────────────────┤ cgroup_rule      │
+   │ check_policy()       │                  │ rules            │
+   └────┬────────────┬────┘                  └────────▲─────────┘
+        │            └──► drop, or pass to the bridge │
+        │ one skb_event per ClientHello               │
+  ringbuf "events"                                    │
+ ═══════╪════════════════════ userspace side ═════════╪══════════════════════
+        │                                             │ once a second
+   ┌────▼─────────────────┐                  ┌────────┴─────────┐
+   │ loader.c             │                  │ enforce.c        │  every in-scope
+   │ skb_loader_poll()    │                  │ skb_enforce_     │  cgroup gets its
+   └────┬─────────────────┘                  │ sync()           │  rule
+        │                                    └───▲──────────▲───┘
+   ┌────▼─────────────────┐                      │          │
+   │ main.c               │◄──── name ───── ┌────┴───────┐  │
+   │ on_event()           │                 │container.c │◄─┼── dockerd
+   │                      │                 │ cgroup id →│  │   (docker.sock,
+   │                      │                 │ name       │  │    libcurl)
+   │                      │                 └────────────┘  │
+   │                      │◄─ verdict ───── ┌────────────┐  │
+   │                      │   + reason      │ policy.c   ├──┘
+   │                      │                 │ explain(), │◄──── policy.json
+   └────┬────────────┬────┘                 │ compile()  │      (jansson)
+        │            │                      └────────────┘
+   ┌────▼───────┐    └──► on exit: counters, then one
+   │ event.c    │         summary line per container
+   └──┬──────┬──┘
+      │      │
+    text    JSON
+    lines   objects
+```
+
 ## Reading order
 
 | File | Lines | What it does |
