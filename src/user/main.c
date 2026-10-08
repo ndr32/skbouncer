@@ -408,7 +408,8 @@ static int setup(const struct options *opt, struct run_state *st)
 
 static void announce(const struct options *opt, const struct run_state *st)
 {
-	const char *doing = st->enforce ? "enforcing on" : "watching";
+	const char *doing = st->enforce ? "enforcing on" :
+			    st->policy ? "auditing" : "watching";
 
 	if (opt->container)
 		fprintf(stderr, "skbouncer: %s container %s (%s ingress); Ctrl-C to stop\n",
