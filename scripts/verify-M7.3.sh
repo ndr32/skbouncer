@@ -5,7 +5,7 @@
 # fuzz.sh is run twice with one seed (the mutants must be identical) and
 # checked against tests/check_m7_3.py's own decode of what was sent and what
 # the sink received. attrib.sh is run with 10 containers. skbouncer itself
-# must be unchanged from the latest eval-* tag, and nothing may be left behind.
+# must be unchanged from the latest release tag, and nothing may be left behind.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
@@ -21,9 +21,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# The tool must be the measured one: the latest eval-* tag, or FREEZE_REF.
-REF=${FREEZE_REF:-$(git describe --tags --abbrev=0 --match 'eval-*' 2>/dev/null)}
-[[ $REF ]] || die "no eval-* tag to compare the tool with; set FREEZE_REF"
+# The tool must be the measured one: the latest release tag (v*), or FREEZE_REF.
+REF=${FREEZE_REF:-$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null)}
+[[ $REF ]] || die "no release tag to compare the tool with; set FREEZE_REF"
 git diff --quiet "$REF" -- src include Makefile policy ||
 	die "skbouncer differs from $REF (src, include, Makefile or policy); tag the new version first"
 make -s >/dev/null || die "build failed"

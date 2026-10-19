@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# M9 oracle: the command-line round (eval-2.1). Userspace only: the kernel
-# program and the event format must be unchanged since eval-2.
+# M9 oracle: the command-line round. Userspace only: the kernel program and
+# the event format must be unchanged from the latest release tag (v*).
 #
 #   --list    running containers with their veth and cgroup id (root: the veth
 #             is found through /proc/<pid>/root)
@@ -39,8 +39,10 @@ cleanup() {
 }
 trap cleanup EXIT
 
-git diff --quiet eval-2 -- src/bpf include ||
-	die "the kernel program or the event format changed since eval-2; this round is userspace only"
+REF=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null)
+[[ $REF ]] || die "no release tag to compare the kernel side with"
+git diff --quiet "$REF" -- src/bpf include ||
+	die "the kernel program or the event format changed since $REF; this round is userspace only"
 
 echo "verify: M6.6 regression (includes M6.5 down to M3)"
 scripts/verify-M6.6.sh | tail -3

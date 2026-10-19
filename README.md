@@ -8,6 +8,12 @@ policy. Audit mode reports; enforce mode drops violating ClientHellos before
 they leave the host. It also measures how much of each ClientHello the first
 TCP segment carries, which post-quantum key exchange has made a real problem.
 
+## Release
+
+`v1.0.0` is the version evaluated in the report: the tool measured in the
+`eval-2.1` campaign, with documentation added since. Results and their
+archives are in `eval/results/`.
+
 ## Build
 
 ```
@@ -71,7 +77,6 @@ src/user/             CLI, loader, container lookup, policy, enforcement, output
 policy/               policy spec and example
 scripts/verify-*.sh   one verifier per milestone; each reruns the earlier ones
 tests/                the verifiers' oracles and TLS test image
-scripts/loop.sh       development loop, with scripts/guard.sh
 eval/census/          ClientHello sizes and split points across real clients
 ```
 
@@ -81,3 +86,16 @@ eval/census/          ClientHello sizes and split points across real clients
 scripts/verify-M6.6.sh      # the whole chain, M3 to M6.6, about 3 minutes
 scripts/verify-M9.sh        # the command line and the menu, after M6.6
 ```
+
+## Development
+
+Lee Junyeong designed skbouncer and directed its development as a final year
+project (BSc Computing Science, Coventry University and PSB Academy). Claude
+Code (Anthropic) was used throughout, as declared in section 3.4 of the
+project proposal. The author set the scope, the design decisions, the safety
+rules and the evaluation plan, and accepted each change. Claude Code drafted
+most of the code, the verifiers, the evaluation harnesses and the
+documentation under that direction. A milestone counted as done only when its
+verifier passed, and each verifier checks skbouncer against a source
+independent of it, such as the TLS server's own log or `bpftool`. Commits
+written with Claude Code carry a `Co-Authored-By` line.

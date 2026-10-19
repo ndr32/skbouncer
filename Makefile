@@ -2,7 +2,7 @@
 #
 # src/bpf/vmlinux.h is committed and is not regenerated here. Fragmentation
 # results depend on the kernel, so the BTF snapshot stays pinned to the
-# kernel recorded in CLAUDE.md.
+# kernel recorded in eval/env/.
 
 CLANG   ?= clang
 BPFTOOL ?= bpftool

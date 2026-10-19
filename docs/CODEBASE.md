@@ -262,5 +262,4 @@ Semantics and limits are in `policy/README.md`.
 | `eval/cost.sh` | Handshake throughput with skbouncer off, in audit and in enforce mode. |
 | `eval/env.sh` | Records the environment every result depends on. |
 | `eval/PLAN.md`, `eval/CONFORMANCE.md` | The evaluation plan; the proposal checked against the build. |
-| `PROMPT.md`, `PROGRESS.md`, `scripts/loop.sh`, `scripts/guard.sh` | The development loop: the current task, the log of every iteration, the runner, and the guard that stops an iteration from editing its own tests. |
 | `src/bpf/vmlinux.h` | Kernel type definitions, generated once and pinned. Not read by hand. |

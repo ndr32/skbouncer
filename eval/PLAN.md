@@ -140,10 +140,11 @@ screenshot of its output.
 - Segment C. The `gso_size` clamp in `read_headers()`. Without it every split
   ClientHello reports as complete.
 
-Code is quoted from tag `eval-2`.
+Code is quoted from `v1.0.0`; the kernel side is unchanged since the `eval-2`
+campaign.
 
 **Results.** The flowcharts, the code, and the output of each segment. For
-segment C, the before and after lines from PROGRESS.md (a 1557-byte record
+segment C, the before and after lines from the development log (a 1557-byte record
 reported 1557 bytes seen and `none`, then 1455 bytes seen and `segment`).
 
 **Discussion.** The verifier limits that shaped segment B (bounded loops,

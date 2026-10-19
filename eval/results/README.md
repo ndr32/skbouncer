@@ -9,6 +9,9 @@ Two campaigns, each run on EC2 (c7i.2xlarge, ap-southeast-1, kernel
 | `eval-2` | 2026-10-06 | `results-eval-2.tar.xz` (17 MB) | `9edec910...8f52` | `eval-2/` |
 | `eval-2.1` | 2026-10-08 | `results-eval-2.1.tar.xz` (8 KB), experiment 1 only | `5d45f60b...103a` | `eval-2.1/` |
 
+The campaign tags are archived outside this repository. `v1.0.0` is the
+`eval-2.1` tool.
+
 `eval-2` is `eval-1.1` with egress removed, the de-slop review applied and the
 code review's fixes. Each of their scored folders holds `criteria.md` and
 `scores.json` from `eval/score.py`, and `skbouncer-<tag>.xlsx` from
