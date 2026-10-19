@@ -90,12 +90,10 @@ scripts/verify-M9.sh        # the command line and the menu, after M6.6
 ## Development
 
 Lee Junyeong designed skbouncer and directed its development as a final year
-project (BSc Computing Science, Coventry University and PSB Academy). Claude
-Code (Anthropic) was used throughout, as declared in section 3.4 of the
+project. Claude Code (Anthropic) was used throughout, as declared in section 3.4 of the
 project proposal. The author set the scope, the design decisions, the safety
 rules and the evaluation plan, and accepted each change. Claude Code drafted
 most of the code, the verifiers, the evaluation harnesses and the
 documentation under that direction. A milestone counted as done only when its
 verifier passed, and each verifier checks skbouncer against a source
-independent of it, such as the TLS server's own log or `bpftool`. Commits
-written with Claude Code carry a `Co-Authored-By` line.
+independent of it, such as the TLS server's own log or `bpftool`.
