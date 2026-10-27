@@ -7,7 +7,7 @@ case "$1" in
 up)
 	docker run -d --name tls-server skb-tls-test sh -c 'for p in 4431 4432 4433; do
 		openssl s_server -quiet -accept $p -cert /cert.pem -key /key.pem & done; wait' >/dev/null
-	srv=$(docker inspect -f '{{.NetworkSettings.IPAddress}}' tls-server)
+	srv=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' tls-server)
 	client() {
 		docker run -d --name "$1" skb-tls-test sh -c "while true; do
 			timeout 5 openssl s_client -connect $srv:$2 $3 </dev/null >/dev/null 2>&1 &&
